@@ -57,9 +57,14 @@ local function handle_json_response(txt, cb)
     local success, json = pcall(vim.json.decode, txt)
     if not success then
         cb.on_error("Could not decode json: " .. vim.inspect(txt))
-    elseif json.error then
+    elseif type(json) ~= "table" then
+        cb.on_error("Not a JSON dictionary: " .. vim.inspect(txt))
+    elseif json.error and type(json.error) == "table" and json.error.message then
         cb.on_error(json.error.message)
+    elseif not json.choices then
+        cb.on_error("No choices in response: " .. vim.inspect(txt))
     else
+        -- print(vim.inspect(json.choices[1].text))
         cb.on_data(json.choices[1].text)
     end
 end
@@ -70,17 +75,27 @@ local function request(endpoint, body, cb)
         cb.on_error("$OPENAI_API_KEY environment variable must be set")
         return
     end
+    local jsonbody = vim.json.encode(body)
     local curl = {
         "curl", "--silent", "--show-error", "--no-buffer", "--max-time",
         config.timeout, "-L", "https://api.openai.com/v1/" .. endpoint, "-H",
         "Authorization: Bearer " .. api_key, "-X", "POST", "-H",
-        "Content-Type: application/json", "-d", vim.json.encode(body)
+        "Content-Type: application/json", "-d", jsonbody
     }
-    --
+    if config.mock_response ~= "" then
+        curl = {
+            "sh", "-c", [[printf 'data: {"choices":[{"text":"%s"}]}\n' "$1"]],
+            "_", config.mock_respone
+        }
+    end
     -- In case of streaming response, json is prefixed with data:
+    local stdout_acc = ""
     local cb_onstream = {
         on_line = function(line)
-            if not vim.startswith(line, "data: ") then
+            if vim.startswith(line, "{") or stdout_acc ~= "" then
+                -- This is an error response.
+                stdout_acc = stdout_acc .. line
+            elseif not vim.startswith(line, "data: ") then
                 cb.on_error("Response from API does not start with data: " ..
                                 vim.inspect(line))
             else
@@ -91,10 +106,14 @@ local function request(endpoint, body, cb)
             end
         end,
         on_error = cb.on_error,
-        on_complete = cb.on_complete
+        on_complete = function()
+            if stdout_acc ~= "" then
+                handle_json_response(stdout_acc, cb)
+            end
+            cb.on_complete()
+        end
     }
     --
-    local stdout_acc = ""
     local cb_nostream = {
         on_line = function(line) stdout_acc = stdout_acc .. "\n" .. line end,
         on_error = cb.on_error,
@@ -111,7 +130,7 @@ end
 function M.completions(body, cb)
     body = vim.tbl_extend("keep", body, {
         model = config.completions_model,
-        max_tokens = 2048,
+        max_tokens = config.max_tokens,
         temperature = config.temperature,
         stream = true
     })

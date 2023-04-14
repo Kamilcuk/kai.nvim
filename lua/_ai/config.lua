@@ -17,5 +17,7 @@ M.temperature = get_var("ai_temperature", 0)
 M.context_before = get_var("ai_context_before", 20)
 M.context_after = get_var("ai_context_after", 20)
 M.timeout = get_var("ai_timeout", 60)
+M.max_tokens = get_var("ai_max_tokens", 2048)
+M.mock_response = ""
 
 return M

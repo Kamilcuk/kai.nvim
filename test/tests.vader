@@ -1,0 +1,39 @@
+Execute (normal):
+  AI write '1 2'
+  sleep 100m
+  AssertEqual trim(join(getline(1, '$'), "\n")), '1 2'
+
+
+Given (percent):
+  1
+Execute (percent):
+  %AI replace by '2' and '2' only
+  sleep 100m
+  AssertEqual trim(join(getline(1, '$'), "\n")), '2'
+
+
+Given (range):
+  1
+  2
+Execute (range):
+  1,1AI replace '1' by '2' and only '1' by '2'
+  sleep 100m
+  AssertEqual trim(join(getline(1, '$'), "\n")), '2'
+
+Given (auto):
+  | insert the number before above |
+  2
+  3
+  4
+  5
+Execute (auto):
+  AI
+  sleep 1
+  redraw
+  AssertEqual trim(substitute(join(getline(1, '$'), " "), " *|[^|]*| *", " ", "")), '1 2 3 4 5'
+
+Execute (fail):
+  let $OPENAI_API_KEY = "invalid"
+  AI write '1 2'
+  sleep 100m
+  AssertEqual trim(join(getline(1, '$'), "\n")), 'empty'
