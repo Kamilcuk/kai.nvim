@@ -3,14 +3,11 @@ local M = {}
 ---@param name string
 ---@param default_value unknown
 ---@return unknown
-local function get_var (name, default_value)
+local function get_var(name, default_value)
     local value = vim.g[name]
-    if value == nil then
-        return default_value
-    end
+    if value == nil then return default_value end
     return value
 end
-
 
 M.indicator_style = get_var("ai_indicator_style", "sign")
 M.indicator_text = get_var("ai_indicator_text", "🤖")
