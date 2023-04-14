@@ -79,7 +79,9 @@ function M:set_buffer_text(text)
 end
 
 function M:finish()
-    vim.api.nvim_buf_del_extmark(self.buffer, ns_id, self.extmark_id)
+    if self.extmark_id then
+        vim.api.nvim_buf_del_extmark(self.buffer, ns_id, self.extmark_id)
+    end
     self.extmark_id = nil
 end
 
