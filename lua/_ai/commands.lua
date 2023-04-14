@@ -8,12 +8,13 @@ local function get_row_length(buffer, num)
     return vim.api.nvim_buf_get_lines(buffer, num, num + 1, true)[1]:len()
 end
 
+-- Get the text from the buffer between the start and end points.
 local function buffer_get_text(buffer, start_row, start_col, end_row, end_col)
     return table.concat(vim.api.nvim_buf_get_text(buffer, start_row, start_col,
                                                   end_row, end_col, {}), "\n")
 end
 
----@param args { args: string, range: integer }
+---@param args { args: string, range: integer, line1: integer, line2: integer, bang: boolean }
 function M.ai(args)
     -- print(vim.inspect(args))
     local prompt = args.args
@@ -37,24 +38,25 @@ function M.ai(args)
             end_row, end_col = unpack(vim.api.nvim_buf_get_mark(buffer, ">"))
             end_row = end_row - 1
         end
-        -- Limit col positions, nvim_buf_get_mark outputs end of universe.
-        local start_line_length = get_row_length(buffer, start_row)
-        start_col = math.min(start_col, start_line_length)
-        local end_line_length = get_row_length(buffer, end_row)
-        end_col = math.min(end_col, end_line_length)
     else
         -- Use the cursor position
         start_row, start_col = unpack(vim.api.nvim_win_get_cursor(0))
         start_row = start_row - 1
+        start_col = start_col + 1
         end_row = start_row
         end_col = start_col
     end
 
-    --print("AA", start_row, start_col, end_row, end_col)
+    -- Limit col positions, nvim_buf_get_mark outputs end of universe.
+    local start_line_length = get_row_length(buffer, start_row)
+    start_col = math.min(start_col, start_line_length)
+    local end_line_length = get_row_length(buffer, end_row)
+    end_col = math.min(end_col, end_line_length)
+
+    -- print("AA", start_row, start_col, end_row, end_col)
 
     local indicator = Indicator:new(buffer, start_row, start_col, end_row,
                                     end_col)
-
     local accumulated_text = ""
     local callbacks = {
         on_data = function(data)
@@ -84,7 +86,7 @@ function M.ai(args)
         local selected_text = buffer_get_text(buffer, start_row, start_col,
                                               end_row, end_col)
         if prompt == "" then
-            -- Replace the selected text, also using it as a prompt
+            -- Replace the selected text, also using it as a prompt.
             openai.completions({prompt = selected_text}, callbacks)
         else
             -- Edit selected text
@@ -92,8 +94,8 @@ function M.ai(args)
                          callbacks)
         end
     else
-        if prompt == "" then
-            -- Insert some text generated using surrounding context
+        if not args.bang then
+            -- Insert some text generated using surrounding context.
             local start_row_before = math.max(0,
                                               start_row - config.context_before)
             local prefix = buffer_get_text(buffer, start_row_before, 0,
@@ -102,12 +104,22 @@ function M.ai(args)
             local end_row_after = math.min(end_row + config.context_after,
                                            line_count - 1)
             local suffix = buffer_get_text(buffer, end_row, end_col,
-                                           end_row_after,
-                                           get_row_length(buffer, end_row_after))
-            openai.completions({prompt = prefix, suffix = suffix}, callbacks)
+                                           end_row_after, get_row_length(buffer,
+                                                                         end_row_after))
+            if prompt then
+                -- Pass prompt with the prefix.
+                prompt = prefix .. "\n\n" .. prompt
+            else
+                prompt = prefix
+            end
+            openai.completions({prompt = prompt, suffix = suffix}, callbacks)
         else
-            -- Insert some text generated using the given prompt
-            openai.completions({prompt = prompt}, callbacks)
+            -- Insert text generated from executing the prompt.
+            if not prompt then
+                vim.api.nvim_err_writeln("ai.vim: empty prompt")
+            else
+                openai.completions({prompt = prompt}, callbacks)
+            end
         end
     end
 end

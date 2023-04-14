@@ -9,15 +9,16 @@ local function get_var(name, default_value)
     return value
 end
 
+M.debug = 0
+M.mock_response = ""
 M.indicator_style = get_var("ai_indicator_style", "sign")
 M.indicator_text = get_var("ai_indicator_text", "🤖")
 M.completions_model = get_var("ai_completions_model", "text-davinci-003")
 M.edits_model = get_var("ai_edits_model", "text-davinci-edit-001")
 M.temperature = get_var("ai_temperature", 0)
-M.context_before = get_var("ai_context_before", 20)
-M.context_after = get_var("ai_context_after", 20)
+M.context_before = get_var("ai_context_before", M.debug and 20 or 9999)
+M.context_after = get_var("ai_context_after", M.debug and 20 or 9999)
 M.timeout = get_var("ai_timeout", 60)
 M.max_tokens = get_var("ai_max_tokens", 2048)
-M.mock_response = ""
 
 return M

@@ -6,6 +6,15 @@ local function safe_close(handle)
     if not vim.loop.is_closing(handle) then vim.loop.close(handle) end
 end
 
+---@class Callback
+---@field on_data function(data: {}) The callback to call with the response.
+---@field on_error function(err: string) The callback to call with an error.
+---@field on_complete function() The callback to call when the request is complete.
+---@field on_line function(line: String)
+Callback = {}
+
+---@param cmd string[] The command to run.
+---@param cb Callback
 local function mypopen(cmd, cb)
     local stdout_line = ""
     local stdout = vim.loop.new_pipe()
@@ -52,7 +61,9 @@ local function mypopen(cmd, cb)
     if not ended then handle:kill() end
 end
 
--- Handle json decoding error or a good json response.
+---Handle json decoding error or a good json response.
+---@param txt string
+---@param cb Callback
 local function handle_json_response(txt, cb)
     local success, json = pcall(vim.json.decode, txt)
     if not success then
@@ -64,7 +75,6 @@ local function handle_json_response(txt, cb)
     elseif not json.choices then
         cb.on_error("No choices in response: " .. vim.inspect(txt))
     else
-        -- print(vim.inspect(json.choices[1].text))
         cb.on_data(json.choices[1].text)
     end
 end
@@ -124,9 +134,15 @@ local function request(endpoint, body, cb)
     }
     --
     local isstream = body["stream"] == true
+    if config.debug then print(vim.inspect(curl), vim.inspect(body)) end
     mypopen(curl, isstream and cb_onstream or cb_nostream)
 end
 
+
+
+---Request OpenAI API for completions.
+---@param body {} The body of the request.
+---@param cb Callback
 function M.completions(body, cb)
     body = vim.tbl_extend("keep", body, {
         model = config.completions_model,
@@ -137,6 +153,9 @@ function M.completions(body, cb)
     request("completions", body, cb)
 end
 
+---Request OpenAI API for edit.
+---@param body {} The body of the request.
+---@param cb Callback
 function M.edits(body, cb)
     body = vim.tbl_extend("keep", body, {
         model = config.edits_model,
