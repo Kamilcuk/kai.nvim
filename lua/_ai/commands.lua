@@ -51,23 +51,33 @@ function M.ai(args)
                                                        end_row + 1, true)[1]:len()
     end_col = math.min(end_col, end_line_length)
 
-    local indicator_obj = indicator.create(buffer, start_row, start_col,
-                                           end_row, end_col)
+    local indicator_obj = indicator:new(buffer, start_row, start_col, end_row,
+                                        end_col)
+
     local accumulated_text = ""
-
-    local function on_data(data)
-        accumulated_text = accumulated_text .. data.choices[1].text
-        indicator.set_preview_text(indicator_obj, accumulated_text)
-    end
-
-    local function on_complete(err)
-        if err then
-            vim.api.nvim_err_writeln("ai.vim: " .. err)
-        else
-            indicator.set_buffer_text(indicator_obj, accumulated_text)
+    local callbacks = {
+        on_data = function(data)
+            accumulated_text = accumulated_text .. data
+            vim.schedule(function()
+                indicator_obj:set_preview_text(accumulated_text)
+                vim.api.nvim_command("redraw")
+            end)
+        end,
+        on_complete = function()
+            vim.schedule(function()
+                indicator_obj:set_buffer_text(accumulated_text)
+                indicator_obj:finish()
+                vim.api.nvim_command("redraw")
+            end)
+        end,
+        on_error = function(err)
+            vim.schedule(function()
+                vim.api.nvim_err_writeln("ai.vim: " .. err)
+                indicator_obj:finish()
+                vim.api.nvim_command("redraw")
+            end)
         end
-        indicator.finish(indicator_obj)
-    end
+    }
 
     if visual_mode then
         local selected_text = table.concat(
@@ -76,11 +86,11 @@ function M.ai(args)
                                                             end_col, {}), "\n")
         if prompt == "" then
             -- Replace the selected text, also using it as a prompt
-            openai.completions({prompt = selected_text}, on_data, on_complete)
+            openai.completions({prompt = selected_text}, callbacks)
         else
             -- Edit selected text
-            openai.edits({input = selected_text, instruction = prompt}, on_data,
-                         on_complete)
+            openai.edits({input = selected_text, instruction = prompt},
+                         callbacks)
         end
     else
         if prompt == "" then
@@ -105,11 +115,10 @@ function M.ai(args)
                                                                   99999999, {}),
                                         "\n")
 
-            openai.completions({prompt = prefix, suffix = suffix}, on_data,
-                               on_complete)
+            openai.completions({prompt = prefix, suffix = suffix}, callbacks)
         else
             -- Insert some text generated using the given prompt
-            openai.completions({prompt = prompt}, on_data, on_complete)
+            openai.completions({prompt = prompt}, callbacks)
         end
     end
 end
