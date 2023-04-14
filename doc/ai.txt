@@ -1,12 +1,19 @@
-*ai.txt* Plugin for generating and editing text using OpenAI and GPT.
+*ai.txt* Plugin for generating and editing text using OpenAI.
 
-Author: Bruno Garcia <https://github.com/aduros/ai.vim>
+Maintaner: Kamil Cukrowski <https://github.com/kamilcuk/ai.vim>
+Original author: Bruno Garcia <https://github.com/aduros/ai.vim>
 
 ==============================================================================
 INTRODUCTION
 
 *ai.vim* exposes OpenAI's powerful language processing model to Neovim in a
 flexible but easy to use plugin.
+
+The plugin calls `curl` and parses the result from OpenAI API.
+https://platform.openai.com/docs/api-reference
+
+===============================================================================
+INSTALLATION
 
 You'll need an OpenAI account and to generate an API key here:
 
@@ -17,43 +24,51 @@ it to your `~/.profile`:
 
         `export OPENAI_API_KEY="sk-abcdefghijklmnopqrstuvwxyz1234567890"`
 
-==============================================================================
+The plugin internally calls `curl` and parses the result from OpenAI API
+
+For vim-plug, add this to your init.vim:
+
+         Plug 'kamilcuk/ai.vim'
+
+===============================================================================
 USAGE
 
-The *:AI* command is your point of entry to ai.vim. With it you can generate
-text using a prompt, complete text at the current position, or edit existing
-text in-place.
+The plugin exposes the `:AI` command.
 
-There are 4 different behaviors for :AI based on whether arguments are
-supplied or text is visually selected.
+:AI [{generator prompt}]
 
-:AI {generator prompt}
-
-        Generate some text using the supplied prompt and insert it at the
-        cursor position.
+        This extracts the g:ai_context_before and g:ai_context_after lines
+        before and after the current cursor position, concatenates the cursor
+        with the lines before, and passes the prefix as `prompt` and context
+        after as `suffix` parameter to `completions` API and parses the result.
 
         Example:
 
             :AI write an email to IT asking for a replacement laptop
 
-:AI
+        Example 2:
 
-        When no prompt is supplied, contextually complete some text to insert
-        at the cursor position. The plugin takes g:ai_context_before lines
-		before the current line and g:ai_context_after after the current
-		cursor position in the buffer and sends to OpenAI API completion api
-		to fill with text.
+            function capitalize (str: string): string {
+                `:AI`
+            }
+
+(with visual selection or range) :AI
+
+        Calls `completions` API with prompt set to the selected range. Then
+        replaces the selection with the result.
 
         Example:
 
-            function capitalize (str: string): string {
-                `(Press <Ctrl-A> here)`
-            }
+            Write an academic essay exploring the pros and cons of yodeling as
+            a career choice.
 
-(with visual selection) :AI {edit instruction}
+            `(Visual select)` :AI
 
-        With some text visually selected, edit it in-place using the given
-        edit instruction.
+(with visual selection or range) :AI {edit instruction}
+
+        Calls the `edits` API with the `input` set to the selected text and
+        `instruction` parameter set to the instruction. Then replaces the
+        selection with the result.
 
         Example:
 
@@ -66,17 +81,6 @@ supplied or text is visually selected.
 
             `(Visual select)` :AI sort by population
 
-(with visual selection) :AI
-
-        When no edit instruction is supplied, use the selected text as a
-        generator prompt. The generated text will replace the selected text.
-
-        Example:
-
-            Write an academic essay exploring the pros and cons of yodeling as
-            a career choice.
-
-            `(Visual select)` :AI
 
 ==============================================================================
 CUSTOMIZING
