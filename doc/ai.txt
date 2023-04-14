@@ -24,9 +24,6 @@ The *:AI* command is your point of entry to ai.vim. With it you can generate
 text using a prompt, complete text at the current position, or edit existing
 text in-place.
 
-There is a recommended mapping of *<CTRL-A>* in normal, visual, and insert
-modes. This mapping can be disabled by setting *g:ai_no_mappings* to 1.
-
 There are 4 different behaviors for :AI based on whether arguments are
 supplied or text is visually selected.
 
@@ -42,7 +39,10 @@ supplied or text is visually selected.
 :AI
 
         When no prompt is supplied, contextually complete some text to insert
-        at the cursor position.
+        at the cursor position. The plugin takes g:ai_context_before lines
+		before the current line and g:ai_context_after after the current
+		cursor position in the buffer and sends to OpenAI API completion api
+		to fill with text.
 
         Example:
 

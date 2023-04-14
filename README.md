@@ -8,7 +8,7 @@ A minimalist Neovim plugin for generating and editing text using OpenAI and GPT.
 - Generate new text using a prompt.
 - Select and edit existing text in-place.
 - Streaming support for completions.
-- Easy to use interface. Just hit `<Ctrl-A>` or run `:AI <prompt>`.
+- Run `:AI <prompt>`.
 - Works with both source code and regular text.
 
 ## Installing
@@ -26,13 +26,11 @@ To see the full help and customization options, run `:help ai.vim`.
 
 ## Tutorial
 
-The most basic use-case is completion, by pressing `<Ctrl-A>` in insert mode.
-
 For example:
 
 ```typescript
 function capitalize (str: string): string {
-    (Press <Ctrl-A> here)
+    <cursor><type :AI>
 }
 ```
 
@@ -48,7 +46,7 @@ ai.vim isn't just for programming! You can also complete regular human text:
 
 ```
 Hey Joe, here are some ideas for slogans for the new petshop. Which do you like best?
-1. <Ctrl-A>
+1. <:AI>
 ```
 
 Results in:
@@ -62,8 +60,7 @@ Hey Joe, here are some ideas for slogans for the new petshop. Which do you like 
 5. "The Pet Store That Loves Your Pet!"
 ```
 
-You can also generate some text by pressing `<Ctrl-A>` in normal mode and providing a prompt. For
-example:
+For example:
 
 ```
 :AI write a thank you email to Bigco engineering interviewer
