@@ -1,7 +1,7 @@
 local M = {}
 
-local openai = require("_ai/openai")
 local config = require("_ai/config")
+local Openai = require("_ai/openai")
 local Indicator = require("_ai/indicator")
 
 local function get_row_length(buffer, num)
@@ -13,6 +13,8 @@ local function buffer_get_text(buffer, start_row, start_col, end_row, end_col)
     return table.concat(vim.api.nvim_buf_get_text(buffer, start_row, start_col,
                                                   end_row, end_col, {}), "\n")
 end
+
+----------------------------------------------------------------------------------
 
 ---@param args { args: string, range: integer, line1: integer, line2: integer, bang: boolean }
 function M.ai(args)
@@ -57,27 +59,19 @@ function M.ai(args)
 
     local indicator = Indicator:new(buffer, start_row, start_col, end_row,
                                     end_col)
-    local accumulated_text = ""
-    local callbacks = {
+
+    local openai = Openai:new{
+        ---@param data string
         on_data = function(data)
-            accumulated_text = accumulated_text .. data
             vim.schedule(function()
-                indicator:set_preview_text(accumulated_text)
-                vim.api.nvim_command("redraw")
+                indicator:add_preview_text(data)
             end)
         end,
-        on_complete = function()
-            vim.schedule(function()
-                indicator:set_buffer_text(accumulated_text)
-                indicator:finish()
-                vim.api.nvim_command("redraw")
-            end)
-        end,
+        on_complete = function() end,
+        ---@param err string
         on_error = function(err)
             vim.schedule(function()
                 vim.api.nvim_err_writeln("ai.vim: " .. err)
-                indicator:finish()
-                vim.api.nvim_command("redraw")
             end)
         end
     }
@@ -87,11 +81,10 @@ function M.ai(args)
                                               end_row, end_col)
         if prompt == "" then
             -- Replace the selected text, also using it as a prompt.
-            openai.completions({prompt = selected_text}, callbacks)
+            openai:completions({prompt = selected_text})
         else
             -- Edit selected text
-            openai.edits({input = selected_text, instruction = prompt},
-                         callbacks)
+            openai:edits({input = selected_text, instruction = prompt})
         end
     else
         if not args.bang then
@@ -108,17 +101,17 @@ function M.ai(args)
                                                                          end_row_after))
             if prompt then
                 -- Pass prompt with the prefix.
-                prompt = prefix .. "\n\n" .. prompt
+                prompt = prompt .. "\n\n" .. prefix
             else
                 prompt = prefix
             end
-            openai.completions({prompt = prompt, suffix = suffix}, callbacks)
+            openai:completions({prompt = prompt, suffix = suffix})
         else
             -- Insert text generated from executing the prompt.
             if not prompt then
                 vim.api.nvim_err_writeln("ai.vim: empty prompt")
             else
-                openai.completions({prompt = prompt}, callbacks)
+                openai:chat(prompt)
             end
         end
     end

@@ -4,6 +4,12 @@ Execute (normal):
   AssertEqual trim(join(getline(1, '$'), "\n")), '1 2'
 
 
+Execute (chat):
+  AI! write '1 2'
+  sleep 100m
+  AssertEqual trim(join(getline(1, '$'), "\n")), '1 2'
+
+
 Given (percent):
   1
 Execute (percent):
