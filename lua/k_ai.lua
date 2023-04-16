@@ -142,26 +142,30 @@ function my.tostrings(...)
     return txt
 end
 
+function my.schedule_maybe(fn, ...)
+    local arg = {...}
+    if vim.in_fast_event() then
+        vim.schedule(function() fn(unpack(arg)) end)
+    else
+        fn(unpack(arg))
+    end
+end
+
 function my.debug(...)
     if config.debug then
-        my.Log(...)
         my.print(...)
     end
 end
 
 function my.error(...)
-    if vim.in_fast_event() then
-        local txt = my.tostrings(...)
-        vim.schedule(function() my.error(txt) end)
-    else
-        vim.api.nvim_err_writeln(my.prefix .. my.tostrings(...))
-    end
+    vim.maybe_schedule(vim.api.nvim_err_writeln, my.prefix .. my.tostrings(...))
 end
 
 function my.print(...) print(my.prefix .. my.tostrings(...)) end
 
 function my.Log(...)
-    (vim.fn['vader#log'] or function(x) end)(my.prefix .. my.tostrings(...))
+    my.schedule_maybe(vim.fn['vader#log'] or function(x) end,
+                      my.prefix .. my.tostrings(...))
 end
 
 function my.safe_close(handle)
@@ -377,9 +381,8 @@ function chat:remove()
         my.print("File " .. self:file() .. " does not exist.")
         return
     end
-    if vim.fn.confirm("Do you really want to delete " .. self:file() .. "?") == 0 then
-        return
-    end
+    if vim.fn.confirm("Do you really want to delete " .. self:file() .. "?") ==
+        0 then return end
     if vim.fn.delete(self:file()) ~= 0 then
         my.print("Could not delete " .. self:file())
     else
@@ -643,7 +646,8 @@ function M.AI(args)
         end
     })
     local prompt = args.args
-    local promptnl = (prompt and prompt .. "\n\n" or "")
+    local filetype = vim.api.nvim_buf_get_option(buffer, "filetype")
+    local promptnl = (prompt and prompt .. "\n\n```" .. filetype .. "\n" or "")
     if selection then
         local selected_text = my.buffer_get_text(buffer, selection)
         if args.bang then
