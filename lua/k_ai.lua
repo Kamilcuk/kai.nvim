@@ -373,6 +373,13 @@ function chat:load()
 end
 
 function chat:remove()
+    if not vim.fn.filereadable(self:file()) then
+        my.print("File " .. self:file() .. " does not exist.")
+        return
+    end
+    if vim.fn.confirm("Do you really want to delete " .. self:file() .. "?") == 0 then
+        return
+    end
     if vim.fn.delete(self:file()) ~= 0 then
         my.print("Could not delete " .. self:file())
     else
@@ -694,7 +701,7 @@ function M.AIChatHistory(_)
 end
 
 ---@param _ Args
-function M.AIChatDel(_) chat:remove() end
+function M.AIChatDelete(_) chat:remove() end
 
 return M
 
