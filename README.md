@@ -49,7 +49,7 @@ To see the full help and customization options, run `:help ai.vim`.
    - remembers chat history in `g:cache_dir/k_ai/chat.json` file.
    - the bot answer is printed at the cursor position
    - you can get chat history with `:AIChatHistory`
-   - you can delete history with `:AIChatDelete`
+   - you can delete history with `:AIChatZDelete`
 
 ## Tutorial
 

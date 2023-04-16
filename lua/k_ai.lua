@@ -701,7 +701,7 @@ function M.AIChatHistory(_)
 end
 
 ---@param _ Args
-function M.AIChatDelete(_) chat:remove() end
+function M.AIChatZDelete(_) chat:remove() end
 
 return M
 

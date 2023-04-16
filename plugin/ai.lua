@@ -7,4 +7,4 @@ local function add(name, opts)
 end
 add("AI", {range = true, nargs = "*", bang = true})
 add("AIChatHistory")
-add("AIChatDelete")
+add("AIChatZDelete")
