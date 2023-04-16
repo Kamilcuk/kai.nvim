@@ -688,7 +688,9 @@ end
 ---@param _ Args
 function M.AIChatHistory(_)
     chat:load()
-    print(vim.inspect(chat:get_messages()))
+    for k, v in ipairs(chat:get_messages() or {}) do
+        print(v.role .. ": " .. vim.inspect(v.content))
+    end
 end
 
 ---@param _ Args
