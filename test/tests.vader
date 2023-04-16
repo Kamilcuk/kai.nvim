@@ -1,45 +1,61 @@
+Execute (prepare):
+  function Myget()
+    let tmp = getline(1, '$')
+    let tmp = join(tmp, " ")
+    let tmp = substitute(tmp, "  *", " ", "g")
+    let tmp = trim(tmp)
+    return tmp
+  endfunction
+  let g:ai_vader = v:true
+
 Execute (normal):
-  AI write '1 2'
-  sleep 100m
-  AssertEqual trim(join(getline(1, '$'), "\n")), '1 2'
+  let g:ai_mock = "1 2"
+  AI write 1 2
+  AssertEqual Myget(), '1 2'
 
 
 Execute (chat):
-  AI! write '1 2'
-  sleep 100m
-  AssertEqual trim(join(getline(1, '$'), "\n")), '1 2'
+  let g:ai_mock = "1 2"
+  AI! write 1 2
+  AssertEqual Myget(), '1 2'
 
 
 Given (percent):
   1
+  2
+  3
 Execute (percent):
-  %AI replace by '2' and '2' only
-  sleep 100m
-  AssertEqual trim(join(getline(1, '$'), "\n")), '2'
+  let g:ai_mock = "2"
+  %AI replace by 2
+  AssertEqual Myget(), '2'
 
 
 Given (range):
   1
   2
 Execute (range):
-  1,1AI replace '1' by '2' and only '1' by '2'
-  sleep 100m
-  AssertEqual trim(join(getline(1, '$'), "\n")), '2'
+  let g:ai_mock = "2"
+  1,1AI replace 1 by 2
+  AssertEqual Myget(), '2 2'
+
 
 Given (auto):
-  | insert the number before above |
+  1
   2
   3
   4
-  5
 Execute (auto):
+  normal! G
+  let g:ai_mock = "5"
   AI
-  sleep 1
-  redraw
-  AssertEqual trim(substitute(join(getline(1, '$'), " "), " *|[^|]*| *", " ", "")), '1 2 3 4 5'
+  AssertEqual Myget(), '1 2 3 45'
 
+
+Given (fail):
+  empty
 Execute (fail):
+  let g:debug = v:true
+  let g:ai_mock = v:false
   let $OPENAI_API_KEY = "invalid"
   AI write '1 2'
-  sleep 100m
-  AssertEqual trim(join(getline(1, '$'), "\n")), 'empty'
+  AssertEqual Myget(), 'empty'

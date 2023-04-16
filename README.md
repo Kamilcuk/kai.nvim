@@ -13,7 +13,7 @@ A minimalist Neovim plugin for generating and editing text using OpenAI and GPT.
 
 ## Installing
 
-For vim-plug, add this to your init.vim:
+vim-plug:
 
 ```vim
 Plug 'kamilcuk/ai.vim'
@@ -23,6 +23,33 @@ Make sure you have an environment variable called `$OPENAI_API_KEY` which you ca
 here](https://beta.openai.com/account/api-keys). You'll also need `curl` installed.
 
 To see the full help and customization options, run `:help ai.vim`.
+
+## How to use
+
+- `:AI` or `:20AI`
+   - take 20 lines before current position
+   - take 20 lines after the cursor position
+   - send that to `completions` OpenAI API
+   - print the completion at cursor position
+- `:AI write a function` or `:20AI write a function`
+   - take the prompt "write a function" and concatenates with 20 lines before cursor position
+   - take 20 lines after cursor position
+   - send that to `completions` OpenAI API
+   - print the completion at cursor position
+- `:\<,\>AI` or `:%AI`
+   - use the selected range as prompt to `completions` OpenAI API
+- `:\<,\>AI fix spelling` or `:%AI fix spelling`
+   - take the selected range
+   - send that to `edits` OpenAI API
+   - replace the selected region with the edit
+   - note, it sometimes takes a long time
+- `:AI! chatting with bot` or `:\<,\>AI! answer that` or `:\<,\>AI!`
+   - chat with bot
+   - uses `chats/completions` OpenAI API to start chatting with bot
+   - remembers chat history in `g:cache_dir/k_ai/chat.json` file.
+   - the bot answer is printed at the cursor position
+   - you can get chat history with `:AIChatHistory`
+   - you can delete history with `:AIChatDelete`
 
 ## Tutorial
 
