@@ -19,7 +19,6 @@
 local config = setmetatable({_default_values = {}}, {
     -- Dynamically get values from global options when evaluated.
     __index = function(self, key)
-
         return vim.g["ai_" .. key] or self._default_values[key]
     end
 })
@@ -35,6 +34,7 @@ config:var("debug", false)
 config:var("cache_dir", vim.fn['stdpath']('cache') .. "/k_ai/")
 config:var("chat_model", "gpt-3.5-turbo")
 config:var("chat_temperature", 0.2)
+config:var("chat_max_tokens", 4097)
 config:var("completions_model", "text-davinci-003")
 config:var("context_after", 20)
 config:var("context_before", 20)
@@ -114,23 +114,11 @@ end
 ---@class my My utils
 local my = {}
 
----@param buffer Buffer
----@param row integer
+my.prefix = "ai.vim: "
+
 function my.get_row_length(buffer, row)
     return vim.api.nvim_buf_get_lines(buffer, row, row + 1, true)[1]:len()
 end
-
--- Get the text from the buffer between the start and end points.
----@param buffer Buffer
----@param reg Region
----@return string
-function my.buffer_get_text(buffer, reg)
-    return table.concat(vim.api.nvim_buf_get_text(buffer, reg.start.row,
-                                                  reg.start.col, reg.stop.row,
-                                                  reg.stop.col, {}), "\n")
-end
-
-my.prefix = "ai.vim: "
 
 ---@returns string
 function my.tostrings(...)
@@ -142,7 +130,8 @@ function my.tostrings(...)
     return txt
 end
 
-function my.schedule_maybe(fn, ...)
+---@param fn function
+function my.maybe_schedule(fn, ...)
     local arg = {...}
     if vim.in_fast_event() then
         vim.schedule(function() fn(unpack(arg)) end)
@@ -151,65 +140,32 @@ function my.schedule_maybe(fn, ...)
     end
 end
 
-function my.debug(...)
-    if config.debug then
-        my.print(...)
+function my.is_vader_running() return vim.g['vader_bang'] ~= nil end
+
+function my.error(...)
+    if my.is_vader_running() then
+        my.maybe_schedule(vim.fn['vader#log'], my.prefix .. my.tostrings(...))
+    else
+        my.maybe_schedule(vim.api.nvim_err_writeln,
+                          my.prefix .. my.tostrings(...))
     end
 end
 
-function my.error(...)
-    vim.maybe_schedule(vim.api.nvim_err_writeln, my.prefix .. my.tostrings(...))
+function my.log(...)
+    if my.is_vader_running() then
+        my.maybe_schedule(vim.fn['vader#log'], my.prefix .. my.tostrings(...))
+    else
+        print(my.prefix .. my.tostrings(...))
+    end
 end
 
-function my.print(...) print(my.prefix .. my.tostrings(...)) end
-
-function my.Log(...)
-    my.schedule_maybe(vim.fn['vader#log'] or function(x) end,
-                      my.prefix .. my.tostrings(...))
-end
+function my.debug(...) if config.debug then my.log(...) end end
 
 function my.safe_close(handle)
-    if not vim.loop.is_closing(handle) then vim.loop.close(handle) end
+    if handle and not vim.loop.is_closing(handle) then vim.loop.close(handle) end
 end
 
 ---@class Buffer
-
----@class Args
----@field args string
----@field range integer
----@field line1 integer
----@field line2 integer
----@field bang boolean
----@field count integer
-
--- Parse command arguments and return the selected region, either visual selection or range passed to command.
----@param buffer Buffer
----@param args Args
----@return nil | Region
-local function get_selection(buffer, args)
-    if args.range == 2 then
-        local start = Pos:new10(vim.api.nvim_buf_get_mark(buffer, "<"))
-        local stop = Pos:new10(vim.api.nvim_buf_get_mark(buffer, ">"))
-        -- If last selection was line or character based and the range
-        -- passed to args match the selection, then use selection,
-        -- otherwise use range.
-        local use_visual = vim.fn.visualmode():lower() == 'v' and start.row ==
-                               args.line1 and stop.row == args.line2
-        if use_visual then
-            -- Visual selection mode.
-            -- Limit col positions, nvim_buf_get_mark outputs end of universe.
-            local end_line_length = my.get_row_length(buffer, stop.row)
-            stop.col = math.min(stop.col, end_line_length)
-            return Region:new(start, stop)
-        else
-            -- Range mode, take whole lines.
-            start = Pos:new10(args.line1, 0)
-            stop = Pos:new10(args.line2,
-                             my.get_row_length(buffer, args.line2 - 1))
-            return Region:new(start, stop)
-        end
-    end
-end
 
 -- {{{1 Indicator
 
@@ -217,78 +173,133 @@ local indicatorSign = "k_ai_indicator_sign"
 
 ---@class Indicator
 ---@field buffer Buffer
----@field accumulated_text string
 ---@field reg Region Region to replace with text.
+---@field signlist {}
+---@field first boolean
 local Indicator = {}
 Indicator.__index = Indicator
 
 ---@param buffer Buffer
 ---@param reg Region
-function Indicator:new(buffer, reg)
-    return setmetatable({buffer = buffer, accumulated_text = "", reg = reg},
-                        Indicator)
+function Indicator.new(buffer, reg)
+    return setmetatable({
+        buffer = buffer,
+        reg = reg,
+        first = true,
+        signlist = {}
+    }, Indicator)
 end
 
 function Indicator:__tostring()
-    return ("Indicator{%s,%s,%s}"):format(self.buffer, self.reg,
-                                          vim.inspect(self.accumulated_text))
+    return ("Indicator{%s,%s}"):format(self.buffer, self.reg)
 end
 
-function Indicator:start()
+function Indicator:on_start()
     vim.fn.sign_define(indicatorSign, {text = config.indicator_text})
-    self:_sign_place()
+    -- For the whole selection, place the signs.
+    self:_place_signs(self.reg.start.row, self.reg.stop.row)
     vim.cmd.redraw()
-end
-
-function Indicator:_set_text()
-    local lines = vim.split(self.accumulated_text, "\n")
-    -- Sign disappears after nvim_buf_set_text. Refresh it.
-    self:_sign_unplace()
-    vim.api.nvim_buf_set_text(self.buffer, self.reg.start.row,
-                              self.reg.start.col, self.reg.stop.row,
-                              self.reg.stop.col, lines)
-    self:_sign_place()
-    -- Calculate new region stop with the filled text.
-    -- On the first line, it starts with what already is on the line.
-    local start_col_pos = #lines == 1 and self.reg.start.col or 0
-    self.reg.stop = Pos:new0(self.reg.start.row + #lines - 1,
-                             start_col_pos + lines[#lines]:len())
-    self.reg:assert()
-    -- Move cursor positin to the end of the region to make it visible.
-    vim.api.nvim_win_set_cursor(0, self.reg.stop:get10())
 end
 
 ---@param data string
-function Indicator:add_preview_text(data)
-    self.accumulated_text = self.accumulated_text .. data
-    self:_set_text()
+function Indicator:_on_data_scheduled(data)
+    -- On the first time they are not equal.
+    if self.first then
+        self.first = false
+        -- Remove the signs placed on the whole selection above.
+        self:_unplace_signs()
+    end
+    --
+    local lines = vim.split(data, "\n")
+    vim.api.nvim_buf_set_text(self.buffer, self.reg.start.row,
+                              self.reg.start.col, self.reg.stop.row,
+                              self.reg.stop.col, lines)
+    -- Calculate new region stop with the filled text.
+    local stop_row = self.reg.start.row + #lines - 1
+    self.reg.stop = Pos:new0(stop_row, my.get_row_length(self.buffer, stop_row))
+    self.reg:assert()
+    -- Place new signs between start.row and stop.row if there were any newlines.
+    self:_place_signs(self.reg.start.row, self.reg.stop.row)
+    -- On the next loop, we will just append new characters. On the first one, we replace the region.
+    self.reg.start = self.reg.stop
+    -- Move cursor position to the end of the region to make it visible.
+    vim.api.nvim_win_set_cursor(0, self.reg.stop:get10())
     vim.cmd.redraw()
 end
 
-function Indicator:_sign_place()
-    for row = self.reg.start.row, self.reg.stop.row do
-        vim.fn.sign_place(0, indicatorSign, indicatorSign, self.buffer,
-                          {lnum = row + 1})
-    end
+---@param data string
+function Indicator:on_data(data)
+    my.maybe_schedule(function() self:_on_data_scheduled(data) end)
 end
 
----@return boolean If any sing was unplaced, in which case we have to call redraw.
-function Indicator:_sign_unplace()
-    local changed = false
-    local signs = vim.fn.sign_getplaced(self.buffer, {group = indicatorSign})
-    for k, v in ipairs(signs) do
-        for k2, v2 in ipairs(v.signs) do
-            local ret = vim.fn.sign_unplace(indicatorSign,
-                                            {buffer = v.bufnr, id = v2.id})
-            if ret == 0 then changed = true end
+function Indicator:_place_signs(start, stop)
+    local toplace = {}
+    for row = start, stop do
+        table.insert(toplace, {
+            buffer = self.buffer,
+            group = indicatorSign,
+            lnum = row + 1,
+            name = indicatorSign
+        })
+    end
+    local ret = vim.fn.sign_placelist(toplace)
+    if ret ~= -1 then
+        for _, v in pairs(ret) do
+            table.insert(self.signlist,
+                         {buffer = self.buffer, group = indicatorSign, id = v})
         end
     end
-    return changed
 end
 
-function Indicator:finish() if self:_sign_unplace() then vim.cmd.redraw() end end
+---@return boolean true if any signs were unplaced
+function Indicator:_unplace_signs()
+    local ret = self.signlist ~= {}
+    vim.fn.sign_unplacelist(self.signlist)
+    self.signlist = {}
+    return ret
+end
 
-function Indicator:__gc() self:finish() end
+function Indicator:_on_complete_scheduled()
+    if self:_unplace_signs() then vim.cmd.redraw() end
+end
+
+function Indicator:on_complete()
+    my.maybe_schedule(function() self:_on_complete_scheduled() end)
+end
+
+function Indicator:__gc() self:_on_complete_scheduled() end
+
+-- {{{1 Tokenizer
+
+-- https://stackoverflow.com/questions/72294775/how-do-i-know-how-much-tokens-a-gpt-3-request-used
+
+local function nchars_to_ntokens_approx(nchars)
+    local init_offset = 0
+    -- returns an estimate of #tokens corresponding to #characters nchars
+    return math.max(0, math.floor((nchars - init_offset) * math.exp(-1)))
+end
+
+local function ntokens_to_nchars_approx(ntokens)
+    -- returns an estimate of #characters corresponding to #tokens ntokens
+    return math.max(0, math.floor(ntokens * math.exp(1)) + 2)
+end
+
+local function nchars_leq_ntokens_approx(maxTokens)
+    -- returns a number of characters very likely to correspond <= maxTokens
+    local sqrt_margin = 0.5
+    local lin_margin = 1.010175047 -- = e - 1.001 - sqrt(1 - sqrt_margin) #ensures return 1 when maxTokens=1
+    return math.max(0, math.floor(maxTokens * math.exp(1) - lin_margin -
+                                      math.sqrt(
+                                          math.max(0, maxTokens - sqrt_margin))))
+end
+
+local function truncate_text_to_maxTokens_approx(text, maxTokens)
+    -- returns a truncation of text to make it (likely) fit within a token limit
+    -- So the output string is very likely to have <= maxTokens, no guarantees though.
+    local char_index =
+        math.min(text:len(), nchars_leq_ntokens_approx(maxTokens))
+    return vim.list_slice(text, 1, char_index)
+end
 
 -- {{{1 Chat
 
@@ -326,7 +337,15 @@ function chat:last_assistant_character()
     return nil
 end
 
-function chat:get_messages() return self.ms end
+function chat:_messages_for_tokens() end
+    local ret = ""
+    for k, v in 
+
+function chat:get_messages()
+    while nchars_leq_ntokens_approx(
+    self:_trim()
+    return self.ms
+end
 
 function chat:file() return config.cache_dir .. '/chat.json' end
 
@@ -335,14 +354,14 @@ function chat:save()
     if config.mock then return end
     if vim.fn.isdirectory(config.cache_dir) == 0 then
         if vim.fn.mkdir(config.cache_dir, "p") == 0 then
-            my.print("Cound not create directory to save chat messages " ..
-                         config.cache_dir)
+            my.log("Cound not create directory to save chat messages " ..
+                       config.cache_dir)
             return
         end
     end
     local file = io.open(self:file(), "w")
     if not file then
-        my.print("could not save chat messages to " .. self:file())
+        my.log("could not save chat messages to " .. self:file())
         return
     end
     local serialized = {version = chatFileVersion, messages = self.ms}
@@ -378,28 +397,23 @@ end
 
 function chat:remove()
     if not vim.fn.filereadable(self:file()) then
-        my.print("File " .. self:file() .. " does not exist.")
+        my.log("File " .. self:file() .. " does not exist.")
         return
     end
     if vim.fn.confirm("Do you really want to delete " .. self:file() .. "?") ==
         0 then return end
     if vim.fn.delete(self:file()) ~= 0 then
-        my.print("Could not delete " .. self:file())
+        my.log("Could not delete " .. self:file())
     else
         chat.ms = nil
-        my.print("Removed file " .. self:file())
+        my.log("Removed file " .. self:file())
     end
 end
 
 -- {{{1 OpenAI
 
----@class OpenaiCallbacks
----@field on_start function() Function called after starting curl process.
----@field on_data function(string) Function called when received response from curl with new data.
----@field on_complete function() Function called after curl has finished operation.
-
 ---@class Openai
----@field cb OpenaiCallbacks
+---@field cb Indicator
 ---@field isstream boolean
 ---@field acc string
 ---@field endpoint string
@@ -407,7 +421,7 @@ end
 local Openai = {}
 Openai.__index = Openai
 
----@param cb OpenaiCallbacks
+---@param cb Indicator
 ---@return Openai
 function Openai:new(cb)
     return setmetatable({
@@ -438,15 +452,15 @@ function Openai:mypopen(cmd)
         else
             my.error(vim.inspect(cmd) .. " " .. stderr_chunks)
         end
-        self.cb.on_complete()
-        vim.schedule(function() self.completed = true end)
+        self.cb:on_complete()
+        self.completed = true
     end)
     if not self.handle then
         my.error(vim.inspect(cmd) .. " could not be started: " ..
                      vim.inspect(error))
         return
     end
-    self.cb.on_start()
+    self.cb:on_start()
     --
     local stdout_line = ""
     stdout:read_start(function(_, chunk)
@@ -472,8 +486,7 @@ function Openai:mypopen(cmd)
                               function() return self.completed end)
     if not ended then
         self.handle:kill()
-        ended, _ = vim.wait(1000, function() return self.completed end)
-        if not ended then my.error("curl function did not exit (?) ") end
+        vim.wait(500, function() return self.completed end)
     end
 end
 
@@ -495,22 +508,23 @@ function Openai:handle_json_response(txt)
         my.error("No choices in response: " .. vim.inspect(txt))
     elseif json.choices[1].text then
         -- Response from completions and edits endpoints.
-        self.cb.on_data(json.choices[1].text)
+        self.cb:on_data(json.choices[1].text)
     elseif json.choices[1].delta then
         -- Response from chat endpoint stream.
         if json.choices[1].delta.role then
             self.delta_role = json.choices[1].delta.role
+            self.cb:on_data(self.delta_role .. ": ")
         end
         if json.choices[1].delta.content then
             local content = json.choices[1].delta.content
             chat:append(self.delta_role, content)
-            self.cb.on_data(content)
+            self.cb:on_data(content)
         end
     elseif json.choices[1].message then
         -- Response from chat endpoint no stream.
         local msg = json.choices[1].message
         chat:append(msg.role, msg.content)
-        self.cb.on_data(msg.content)
+        self.cb:on_data(msg.content)
     else
         my.error("Could not parse response: " .. vim.inspect(txt))
     end
@@ -538,9 +552,27 @@ function Openai:on_end()
     elseif string.find(self.endpoint, "chat") then
         -- When using chat completion add an additional trailing newline to have the cursor ending on the next line.
         if chat:last_assistant_character() ~= "\n" then
-            self.cb.on_data("\n")
+            self.cb:on_data("\n")
         end
     end
+end
+
+function Openai:mock_script()
+    print(config.mock)
+    return {
+        "sh", "-c", [[
+        set -- $*
+        if [ $# -eq 1 ]; then
+            printf '{"choices":[{"text":"%s\\n"}]}\n' "$1"
+        else
+            for i; do
+                sleep 1
+                printf 'data: {"choices":[{"text":"%s\\n"}]}\n' "$i"
+            done
+            printf 'data: [DONE]\n'
+        fi
+        ]], "--", config.mock
+    }
 end
 
 function Openai:request(endpoint, body)
@@ -558,23 +590,7 @@ function Openai:request(endpoint, body)
         "Authorization: Bearer " .. api_key, "-X", "POST", "-H",
         "Content-Type: application/json", "-d", jsonbody
     }
-    if config.mock then
-        -- For testing.
-        curl = {
-            "sh", "-c", [[
-            set -- $*
-            if [ $# -eq 1 ]; then
-                printf '{"choices":[{"text":"%s\\n"}]}\n' "$1"
-            else
-                for i in $*; do
-                    printf 'data: {"choices":[{"text":"%s\\n"}]}\n' "$i"
-                    sleep 0.1
-                done
-                printf 'data: [DONE]\n'
-            fi
-            ]], "_", config.mock
-        }
-    end
+    if config.mock then curl = self:mock_script() end
     self:mypopen(curl)
 end
 
@@ -614,92 +630,163 @@ function Openai:chat(message)
     chat:save()
 end
 
--- {{{1 commands :AI
+-- {{{1 Cmd object
+
+---@class Args
+---@field args string
+---@field range integer
+---@field line1 integer
+---@field line2 integer
+---@field bang boolean
+---@field count integer
+
+---@class Cmd
+---@field args Args
+---@field buffer Buffer
+---@field selection nil | Region Selected region, if any
+Cmd = {}
+Cmd.__index = Cmd
+
+---@param args Args
+---@return Cmd
+function Cmd.new(args)
+    local self = setmetatable({
+        args = args,
+        buffer = vim.api.nvim_get_current_buf()
+    }, Cmd)
+    self.selection = self:get_selection()
+    return self
+end
+
+---@param row integer
+function Cmd:get_row_length(row) return my.get_row_length(self.buffer, row) end
+
+-- Get the text from the buffer between the start and end points.
+---@param reg Region
+---@return string
+function Cmd:buffer_get_text(reg)
+    return table.concat(vim.api.nvim_buf_get_text(self.buffer, reg.start.row,
+                                                  reg.start.col, reg.stop.row,
+                                                  reg.stop.col, {}), "\n")
+end
+-- Parse command arguments and return the selected region, either visual selection or range passed to command.
+---@return nil | Region
+function Cmd:get_selection()
+    local args = self.args
+    local buffer = self.buffer
+    if args.range > 0 then
+        local start = Pos:new10(vim.api.nvim_buf_get_mark(buffer, "<"))
+        local stop = Pos:new10(vim.api.nvim_buf_get_mark(buffer, ">"))
+        -- If last selection was line or character based and the range
+        -- passed to args match the selection, then use selection,
+        -- otherwise use range.
+        local use_visual = vim.fn.visualmode():lower() == 'v' and start.row ==
+                               args.line1 and stop.row == self.args.line2
+        if use_visual then
+            -- Visual selection mode.
+            -- Limit col positions, nvim_buf_get_mark outputs end of universe.
+            local end_line_length = self:get_row_length(stop.row)
+            stop.col = math.min(stop.col, end_line_length)
+        else
+            -- Range mode, take whole lines.
+            start = Pos:new10(args.line1, 0)
+            stop = Pos:new10(args.line2, self:get_row_length(args.line2 - 1))
+        end
+        return Region:new(start, stop)
+    end
+end
+
+-- Extract context before and after cursor.
+---@return string, string
+function Cmd:get_context(cursor)
+    local selection = self.selection
+    local args = self.args
+    local before, after
+    if selection then
+        before = Region:new(selection.start, cursor)
+        after = Region:new(cursor, selection.stop)
+    else
+        local context_before = args.range == 1 and args.count or
+                                   config.context_before
+        local context_after = args.range == 1 and args.count or
+                                  config.context_after
+        --
+        local start_row = math.max(0, cursor.row - context_before)
+        before = Region:new(Pos:new0(start_row, 0), cursor)
+        --
+        local buffer_line_count = vim.api.nvim_buf_line_count(self.buffer)
+        local stop_row = math.min(cursor.row + context_after,
+                                  buffer_line_count - 1)
+        local stop_row_length = self:get_row_length(stop_row)
+        local stop_pos = Pos:new0(stop_row, stop_row_length)
+        after = Region:new(cursor, stop_pos)
+    end
+    local prefix = self:buffer_get_text(before)
+    local suffix = self:buffer_get_text(after)
+    return prefix, suffix
+end
+
+---@return Pos Position of the cursor.
+function Cmd:get_cursor()
+    local o = Pos:new10(vim.api.nvim_win_get_cursor(0))
+    -- Get the position after cursor.
+    -- If the current line is empty, then the cursor starts at zero position.
+    -- If the current line is not empty, start with the place _after_ the cursor.
+    if self:get_row_length(o.row) ~= 0 then o.col = o.col + 1 end
+    return o
+end
+
+---@param replace Region to replace when starting writing to buffer.
+---@returns Openai
+function Cmd:openai(replace)
+    return Openai:new(Indicator.new(self.buffer, replace))
+end
+
+-- {{{1 M.AI
 
 ---@class M
 local M = {}
 
 ---@param args Args
 function M.AI(args)
-    -- print(vim.inspect(args))
-    --
-    ---@type Buffer
-    local buffer = vim.api.nvim_get_current_buf()
-    local selection = get_selection(buffer, args)
-    local aftercursor = (function()
-        local o = Pos:new10(vim.api.nvim_win_get_cursor(0))
-        -- If the current line is empty, then the cursor starts at zero position.
-        -- If the current line is not empty, start with tha places _after_ the cursor.
-        if my.get_row_length(buffer, o.row) ~= 0 then o.col = o.col + 1 end
-        return o
-    end)()
-    --
-    local replace = selection or Region:new(aftercursor, aftercursor)
-    local indicator = Indicator:new(buffer, replace)
-    local openai = Openai:new({
-        on_start = function() indicator:start() end,
-        on_data = function(data)
-            vim.schedule(function() indicator:add_preview_text(data) end)
-        end,
-        on_complete = function()
-            vim.schedule(function() indicator:finish() end)
-        end
-    })
+    local cmd = Cmd.new(args)
     local prompt = args.args
-    local filetype = vim.api.nvim_buf_get_option(buffer, "filetype")
-    local promptnl = (prompt and prompt .. "\n\n```" .. filetype .. "\n" or "")
-    if selection then
-        local selected_text = my.buffer_get_text(buffer, selection)
-        if args.bang then
-            -- Get selection with prompt and send to chat.
-            openai:chat(promptnl .. selected_text)
-        elseif prompt == "" then
-            -- Replace the selected text, also using it as a prompt.
-            openai:completions({prompt = selected_text})
-        else
-            -- Edit selected text.
-            openai:edits({input = selected_text, instruction = prompt})
-        end
+    local cursor = cmd:get_cursor()
+    local replace = Region:new(cursor, cursor)
+    if not args.bang then
+        assert(not cmd.selection, "Selection mode is not supported")
+        assert(prompt, "Prompt is missing")
+        cmd:openai(replace):chat(prompt)
     else
-        if args.bang then
-            if not prompt then
-                my.error("empty prompt for :AI!")
-            else
-                -- Insert text generated from executing the prompt.
-                openai:chat(prompt)
-            end
-        else
-            -- Get context from lines before and after cursor position.
-            local prefix, suffix = (function()
-                local context_before = args.range == 1 and args.count or
-                                           config.context_before
-                local context_after = args.range == 1 and args.count or
-                                          config.context_after
-                --
-                local buffer_line_count = vim.api.nvim_buf_line_count(buffer)
-                local start_row = math.max(0, aftercursor.row - context_before)
-                local stop_row = math.min(aftercursor.row + context_after,
-                                          buffer_line_count - 1)
-                --
-                local prefix = my.buffer_get_text(buffer, Region:new(
-                                                      Pos:new0(start_row, 0),
-                                                      aftercursor))
-                local stop_row_length = my.get_row_length(buffer, stop_row)
-                local stop_pos = Pos:new0(stop_row, stop_row_length)
-                local suffix = my.buffer_get_text(buffer, Region:new(
-                                                      aftercursor, stop_pos))
-                return prefix, suffix
-            end)()
-            -- Insert some text generated using surrounding context.
-            openai:completions({prompt = promptnl .. prefix, suffix = suffix})
+        local prefix, suffix = cmd:get_context(cursor)
+        -- Prefix the selection with "prompt ```<filetype>".
+        local promptnl = ""
+        if prompt then
+            local filetype = vim.api.nvim_buf_get_option(cmd.buffer, "filetype")
+            promptnl = prompt .. "\n\n```" .. filetype .. "\n"
         end
+        cmd:openai(replace):completions({
+            prompt = promptnl .. prefix,
+            suffix = suffix
+        })
     end
+end
+
+function M.AIEdit(args)
+    local cmd = Cmd.new(args)
+    local prompt = args.args
+    local selection = cmd:get_selection()
+    assert(selection, "AIEdit requires a selection")
+    assert(args.range == 0, "Chat command does not take selection")
+    assert(args.args, "Command requires instruction how to edit")
+    local selected_text = cmd:buffer_get_text(selection)
+    cmd:openai(selection):edits({input = selected_text, instruction = prompt})
 end
 
 ---@param _ Args
 function M.AIChatHistory(_)
     chat:load()
-    for k, v in ipairs(chat:get_messages() or {}) do
+    for _, v in ipairs(chat:get_messages() or {}) do
         print(v.role .. ": " .. vim.inspect(v.content))
     end
 end
