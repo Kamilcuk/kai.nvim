@@ -35,16 +35,16 @@ USAGE
 
 The plugin exposes the `:AI` command.
 
-:AI [{generator prompt}]
+:[range]AIEdit [{generator prompt}]
 
-        This extracts the g:ai_context_before and g:ai_context_after lines
+        This extracts the range or g:ai_context_before and g:ai_context_after lines
         before and after the current cursor position, concatenates the cursor
         with the lines before, and passes the prefix as `prompt` and context
         after as `suffix` parameter to `completions` API and parses the result.
 
         Example:
 
-            :AI write an email to IT asking for a replacement laptop
+            :AIEdit write an email to IT asking for a replacement laptop
 
         Example 2:
 
@@ -52,7 +52,7 @@ The plugin exposes the `:AI` command.
                 `:AI`
             }
 
-(with visual selection or range) :AI
+:(with visual selection or range) :AIA
 
         Calls `completions` API with prompt set to the selected range. Then
         replaces the selection with the result.

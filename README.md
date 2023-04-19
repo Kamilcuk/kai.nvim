@@ -1,55 +1,58 @@
 # 🤖 ai.vim
 
-A minimalist Neovim plugin for generating and editing text using OpenAI and GPT.
+Neovim plugin for generating and editing text using OpenAI.
 
 ## Features
 
-- Complete text in insert mode.
+- Use OpenAI completions, edit and chat API, see
+  [https://platform.openai.com/docs/guides/completion](https://platform.openai.com/docs/guides/completion).
 - Generate new text using a prompt.
 - Select and edit existing text in-place.
-- Streaming support for completions.
-- Run `:AI <prompt>`.
-- Works with both source code and regular text.
+- Depends on `curl` installed, no additional installation required.
 
 ## Installing
 
-vim-plug:
+Generate OpenAI API key from [https://beta.openai.com/account/api-keys](https://beta.openai.com/account/api-keys).
+
+Export the key in `$OPENAI_API_KEY` environment variable.
+
+Put this with vim-plug:
 
 ```vim
 Plug 'kamilcuk/ai.vim'
 ```
 
-Make sure you have an environment variable called `$OPENAI_API_KEY` which you can [generate
-here](https://beta.openai.com/account/api-keys). You'll also need `curl` installed.
+## How do I use this?
 
-To see the full help and customization options, run `:help ai.vim`.
+Read [https://platform.openai.com/docs/guides/code](https://platform.openai.com/docs/guides/code).
 
-## How to use
-
-- `:AI` or `:20AI`
-   - take 20 lines before current position
-   - take 20 lines after the cursor position
-   - send that to `completions` OpenAI API
-   - print the completion at cursor position
-- `:AI write a function` or `:20AI write a function`
-   - take the prompt "write a function" and concatenates with 20 lines before cursor position
-   - take 20 lines after cursor position
-   - send that to `completions` OpenAI API
-   - print the completion at cursor position
-- `:\<,\>AI` or `:%AI`
-   - use the selected range as prompt to `completions` OpenAI API
-- `:\<,\>AI fix spelling` or `:%AI fix spelling`
-   - take the selected range
-   - send that to `edits` OpenAI API
-   - replace the selected region with the edit
-   - note, it sometimes takes a long time
-- `:AI! chatting with bot` or `:\<,\>AI! answer that` or `:\<,\>AI!`
-   - chat with bot
-   - uses `chats/completions` OpenAI API to start chatting with bot
-   - remembers chat history in `g:cache_dir/k_ai/chat.json` file.
-   - the bot answer is printed at the cursor position
-   - you can get chat history with `:AIChatHistory`
-   - you can delete history with `:AIChatZDelete`
+- `:AI prompt`
+    - Chat with AI using `chats/completions` API.
+    - The response will be printed on cursor position.
+    - The chat conversation history is saved into `g:cache_dir/k_ai/chat.json` file.
+    - The chat history is trimmed to approximate number of tokens
+      to keep below maximum number of tokens allowed and also to reduce number of tokens you pay for.
+          - The calculation of tokens is approximate, because really counting tokens would be too hard.
+    - I use this for prompting simple stuff, like `:AI how to write lua function that does something...?`
+      then I can polish the results by asking follow up questions.
+    - I can use this freely, because it does not send company proprietary code to OpenAI.
+    - You can get chat history with `:AIChatHistory`.
+    - You can delete one most earliest prompt from history with `:AIChatZDelete 1`, in case you get "too many tokens" error.
+    - You can delete history file with `:AIChatZDelete file`.
+- `:AIA` or `:AIAdd`
+    - Take 20 lines before current position.
+    - Take 20 lines after the cursor position.
+    - Send that to `completions` OpenAI API.
+    - "Add" the response from the completion to the buffer at cursor position.
+    - `:20AIA` or `:40AIA`
+        - The single number does _not_ represent the line number, I decided that is useless.
+        - Uses the single number for the count of lines below and after the cursor position.
+    - `:-20,+10AI` or `:%AI` or `:'<,'>AI`
+        - Take the selection and split it on cursor position for before and after sections..
+- `:\<,\>AIEdit fix spelling` or `:%AIEdit fix spelling`
+   - Take the selected range and sends it to `edits` API with the presented prompt.
+   - Uses `code-davinci-edit-001` model.
+   - There is also `AIEditText` that uses `text-davinci-edit-001` for editing text.
 
 ## Tutorial
 
@@ -57,7 +60,7 @@ For example:
 
 ```typescript
 function capitalize (str: string): string {
-    <cursor><type :AI>
+    <cursor><type :AIA>
 }
 ```
 
@@ -90,7 +93,7 @@ Hey Joe, here are some ideas for slogans for the new petshop. Which do you like 
 For example:
 
 ```
-:AI write a thank you email to Bigco engineering interviewer
+:AIA write a thank you email to Bigco engineering interviewer
 ```
 
 Results in something like:
@@ -120,7 +123,7 @@ body {
 }
 ```
 
-Visually selecting the above CSS and running `:AI convert colors to hex` results in:
+Visually selecting the above CSS and running `:AIEdit convert colors to hex` results in:
 
 ```css
 body {
@@ -140,7 +143,7 @@ List of capitals:
 5. Boston
 ```
 
-Visually selecting this text and running `:AI sort by population` results in:
+Visually selecting this text and running `:AIEdit sort by population` results in:
 
 ```
 List of capitals:
@@ -150,26 +153,6 @@ List of capitals:
 4. Miami
 5. Honolulu
 ```
-
-You can build your own shortcuts for long and complex prompts. For example:
-
-```vim
-vnoremap <silent> <leader>f :AI fix grammar and spelling and replace slang and contractions with a formal academic writing style<CR>
-```
-
-With this custom mapping you can select text that looks like this:
-
-```
-Me fail English? That's unpossible!
-```
-
-And by pressing `<leader>f` transform it into this:
-
-```
-I failed English? That is impossible!
-```
-
-If you come up with any exciting ways to use ai.vim, please share what you find!
 
 ## Important Disclaimers
 

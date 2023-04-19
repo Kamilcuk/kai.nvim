@@ -866,7 +866,7 @@ end
 
 local function AIEditModel(args, model)
     local cmd = Cmd.new(args)
-    local prompt = args.args
+    local prompt = cmd.prompt
     local selection = cmd.selection
     assert(selection, "Command requires a selection")
     assert(prompt, "Command requires instruction how to edit")
