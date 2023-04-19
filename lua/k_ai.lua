@@ -7,12 +7,10 @@
 ---
 ---@field cache_dir string
 ---@field chat_max_tokens integer
----@field chat_model string
 ---@field chat_temperature number
 ---@field completions_max_tokens integer
 ---@field context_after integer
 ---@field context_before integer
----@field edits_model string
 ---@field indicator_text string
 ---@field temperature number
 ---@field timeout integer Timeout in seconds
@@ -22,13 +20,11 @@ local config_defaults = {
     --
     cache_dir = vim.fn.stdpath('cache') .. "/k_ai/",
     chat_max_tokens = 4000,
-    chat_model = "gpt-3.5-turbo",
     chat_temperature = 0,
     completions_max_tokens = 2048,
     completions_model = "text-davinci-003",
     context_after = 20,
     context_before = 20,
-    edits_model = "code-davinci-edit-001",
     indicator_text = "🤖",
     temperature = 0,
     timeout = 60
@@ -106,8 +102,6 @@ end
 function Region:__tostring()
     return ("Region{%s,%s}"):format(self.start, self.stop)
 end
-
-function Region:height() return self.stop.row - self.start.row end
 
 -- {{{1 my
 
@@ -313,6 +307,7 @@ end
 ---@param content string
 function chat:append_user(content) self:append(ChatRole.user, content) end
 
+-- Get last character sent by assistant.
 ---@return string?
 function chat:last_assistant_character()
     if #self.ms ~= 0 and self.ms[#self.ms].role == ChatRole.assistant then
@@ -320,15 +315,19 @@ function chat:last_assistant_character()
     end
 end
 
+-- Count approximate number of tokens in the chat.
+---@return integer
 function chat:tokens_cnt()
     local str = ""
     vim.tbl_map(function(v) str = str .. " " .. v.content end, self.ms)
     return tok.nchars_to_ntokens_approx(str:len())
 end
 
+--- Remove first x messages.
 ---@param x integer
-function chat:remove_cnt(x) for _ = 1, x do table.remove(self.ms, 1) end end
+function chat:remove_cnt(x) for _ = 1, x do table.remove(self.ms, 2) end end
 
+-- Trim messages to config.chat_max_tokens tokens.
 ---@private
 function chat:_trim_messages_to_tokens()
     assert(config.chat_max_tokens >= 0)
@@ -364,8 +363,8 @@ function chat:save()
     -- my.print("saved chat mesages to " .. self:file())
 end
 
+--- Loads chat messages history from file.
 function chat:_load_in()
-    if config.mock then return end
     local file = io.open(self:file(), "r")
     if not file then return end
     local success, serialized = pcall(vim.json.decode, file:read("*all"))
@@ -723,7 +722,7 @@ end
 ---@class Cmd
 ---@field args Args
 ---@field buffer Buffer
----@field selection Region? Selected region, if any
+---@field cursor Pos
 ---@field prompt string?
 Cmd = {}
 Cmd.__index = Cmd
@@ -739,7 +738,7 @@ function Cmd.new(args)
     local buffer_is_modifiable = vim.api.nvim_buf_get_option(self.buffer,
                                                              'modifiable')
     assert(buffer_is_modifiable, "Buffer is not modifiable")
-    self.selection = self:_get_selection()
+    self.cursor = self:_get_cursor()
     return self
 end
 
@@ -755,12 +754,23 @@ function Cmd:buffer_get_text(reg)
                                                   reg.stop.col, {}), "\n")
 end
 
--- Parse command arguments and return the selected region, either visual selection or range passed to command.
 ---@private
----@return nil | Region
-function Cmd:_get_selection()
+---@return Pos Position of the cursor.
+function Cmd:_get_cursor()
+    local o = Pos:new10(vim.api.nvim_win_get_cursor(0))
+    -- Get the position after cursor.
+    -- If the current line is empty, then the cursor starts at zero position.
+    -- If the current line is not empty, start with the place _after_ the cursor.
+    if self:get_row_length(o.row) ~= 0 then o.col = o.col + 1 end
+    return o
+end
+
+-- Extract command buffer context.
+function Cmd:get_context()
     local args = self.args
     local buffer = self.buffer
+    ---@type Pos, Pos
+    local before, after
     if args.range == 2 then
         local start = Pos:new10(vim.api.nvim_buf_get_mark(buffer, "<"))
         local stop = Pos:new10(vim.api.nvim_buf_get_mark(buffer, ">"))
@@ -779,50 +789,27 @@ function Cmd:_get_selection()
             start = Pos:new10(args.line1, 0)
             stop = Pos:new10(args.line2, self:get_row_length(args.line2 - 1))
         end
-        return Region.new(start, stop)
-    end
-end
-
--- Extract context before and after cursor.
----@return string, string
-function Cmd:get_context(cursor)
-    local selection = self.selection
-    local args = self.args
-    local before, after
-    if selection then
-        before = Region.new(selection.start, cursor)
-        after = Region.new(cursor, selection.stop)
+        before = start
+        after = stop
     else
+        local cursor = self.cursor
         local one_arg = args.range == 1 and args.count or nil
         local context_before = one_arg or config.context_before
         local context_after = one_arg or config.context_after
         --
         local start_row = math.max(0, cursor.row - context_before)
-        before = Region.new(Pos:new0(start_row, 0), cursor)
+        before = Pos:new0(start_row, 0)
         --
         local buffer_line_count = vim.api.nvim_buf_line_count(self.buffer)
         local stop_row = math.min(cursor.row + context_after,
                                   buffer_line_count - 1)
         local stop_row_length = self:get_row_length(stop_row)
-        local stop_pos = Pos:new0(stop_row, stop_row_length)
-        after = Region.new(cursor, stop_pos)
+        after = Pos:new0(stop_row, stop_row_length)
     end
     my.log(
         ("Genering completion from %d lines above and %d lines below"):format(
-            before:height(), after:height()))
-    local prefix = self:buffer_get_text(before)
-    local suffix = self:buffer_get_text(after)
-    return prefix, suffix
-end
-
----@return Pos Position of the cursor.
-function Cmd:get_cursor()
-    local o = Pos:new10(vim.api.nvim_win_get_cursor(0))
-    -- Get the position after cursor.
-    -- If the current line is empty, then the cursor starts at zero position.
-    -- If the current line is not empty, start with the place _after_ the cursor.
-    if self:get_row_length(o.row) ~= 0 then o.col = o.col + 1 end
-    return o
+            before.row, after.row))
+    return Region.new(before, after)
 end
 
 ---@param replace Region to replace when starting writing to buffer.
@@ -838,22 +825,23 @@ local M = {}
 
 local function AIModel(args, model)
     local cmd = Cmd.new(args)
-    assert(not cmd.selection, "Chat does not take selection")
-    assert(cmd.prompt, "Prompt is missing")
-    local cursor = cmd:get_cursor()
+    local cursor = cmd.cursor
     local replace = Region.new(cursor, cursor)
     cmd:openai(replace):chat(cmd.prompt, {model = model})
 end
 
 function M.AI(args) AIModel(args, "gpt-3.5-turbo") end
-
 function M.AI4(args) AIModel(args, "gpt-4") end
 
 function M.AIAdd(args)
     local cmd = Cmd.new(args)
-    local cursor = cmd:get_cursor()
+    local cursor = cmd.cursor
     local replace = Region.new(cursor, cursor)
-    local prefix, suffix = cmd:get_context(cursor)
+    local context = cmd:get_context()
+    assert(context.start <= cursor and cursor <= context.stop,
+           "Cursor position has to be inside selected region")
+    local prefix = cmd:buffer_get_text(Region.new(context.start, cursor))
+    local suffix = cmd:buffer_get_text(Region.new(cursor, context.stop))
     if cmd.prompt then
         -- Prefix the selection with "prompt ```<filetype>".
         local filetype = vim.api.nvim_buf_get_option(cmd.buffer, "filetype")
@@ -866,21 +854,17 @@ end
 
 local function AIEditModel(args, model)
     local cmd = Cmd.new(args)
-    local prompt = cmd.prompt
-    local selection = cmd.selection
-    assert(selection, "Command requires a selection")
-    assert(prompt, "Command requires instruction how to edit")
-    local selected_text = cmd:buffer_get_text(selection)
+    local context = cmd:get_context()
+    local selected_text = cmd:buffer_get_text(context)
     assert(selected_text ~= "", "Selected text is empty")
-    cmd:openai(selection):edits({
+    cmd:openai(context):edits({
         model = model,
         input = selected_text,
-        instruction = prompt
+        instruction = ""
     })
 end
 
-function M.AIEdit(args) AIEditModel(args, config.edits_model) end
-function M.AIEditCode(args) AIEditModel(args, "code-davinci-edit-001") end
+function M.AIEdit(args) AIEditModel(args, "code-davinci-edit-001") end
 function M.AIEditText(args) AIEditModel(args, "text-davinci-edit-001") end
 
 function M.AIChatHistory(_)
