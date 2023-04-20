@@ -27,7 +27,7 @@ local config_defaults = {
     context_before = 20,
     indicator_text = "🤖",
     temperature = 0,
-    timeout = 60
+    timeout = 1200
 }
 
 ---@type Config
@@ -406,26 +406,27 @@ end
 ---@field private cmd string[] The command to run.
 ---@field private on_start fun(): nil
 ---@field private on_line fun(line: string): nil
----@field private on_end fun(code: integer, signal: integer, stderr: string): nil
+---@field private on_exit fun(code: integer, signal: integer, stderr: string): nil
 Subprocess = {}
 Subprocess.__index = Subprocess
 
----@param o {cmd: string[], on_start: (fun(): nil), on_line: (fun(line: string): nil), on_end: (fun(code: integer, signal: integer, stderr: string): nil)}
-function Subprocess.run(o)
+---@param o {cmd: string[], on_start: (fun(): nil), on_line: (fun(line: string): nil), on_exit: (fun(code: integer, signal: integer, stderr: string): nil)}
+function Subprocess.popen(o)
     assert(o.cmd)
-    assert(o.on_start)
-    assert(o.on_line)
-    assert(o.on_end)
-    setmetatable(o, Subprocess):do_run()
+    local self = setmetatable(o, Subprocess)
+    self.on_start = self.on_start or function() end
+    self.on_line = self.on_line or function(line) end
+    self.on_exit = self.on_exit or function(code, signal, stderr) end
+    self:_do_run()
 end
 
 ---@private
----@return Subprocess?
-function Subprocess:do_run()
+function Subprocess:_do_run()
     local stdout = vim.loop.new_pipe()
     local stderr_acc = ""
     local stderr = vim.loop.new_pipe()
-    self.handle, _ = vim.loop.spawn(self.cmd[1], {
+    local pid_or_error
+    self.handle, pid_or_error = vim.loop.spawn(self.cmd[1], {
         args = vim.list_slice(self.cmd, 2),
         stdio = {nil, stdout, stderr}
     }, function(code, signal)
@@ -434,12 +435,12 @@ function Subprocess:do_run()
         my.safe_close(stdout)
         my.safe_close(stderr)
         my.safe_close(self.handle)
-        self.on_end(code, signal, stderr_acc)
+        self.on_exit(code, signal, stderr_acc)
         self.returncode = code
     end)
     if not self.handle then
-        my.error(vim.inspect(self.cmd) .. " could not be started: " ..
-                     vim.inspect(error))
+        local error = pid_or_error
+        my.error(vim.inspect(self.cmd) .. " could not be started: " .. error)
         return
     end
     self.on_start()
@@ -524,13 +525,13 @@ end
 
 ---@param cmd string[] The command to run.
 function Openai:exe(cmd)
-    Subprocess.run {
+    Subprocess.popen {
         cmd = cmd,
         on_start = function() self.cb:on_start() end,
         on_line = function(line) self:on_line(line) end,
-        on_end = function(code, _, stderr)
+        on_exit = function(code, _, stderr)
             if code == 0 then
-                self:on_end()
+                self:on_exit()
             else
                 my.error(vim.inspect(cmd) .. " " .. stderr)
             end
@@ -601,7 +602,7 @@ function Openai:on_data(txt)
 end
 
 ---@private
-function Openai:on_end()
+function Openai:on_exit()
     if self.acc ~= "" then
         self:handle_response(self.acc)
     elseif self.is_chat then
@@ -613,7 +614,8 @@ function Openai:on_end()
 end
 
 ---@private
-function Openai:mock_script()
+---@return string[]
+function Openai:_mock_script()
     return {
         "sh", "-c", [[
         set -- $*
@@ -653,7 +655,7 @@ end
 ---@param body {}
 function Openai:_request(endpoint, body)
     local curl = self._get_curl(endpoint, body)
-    if config.mock then curl = self:mock_script() end
+    if config.mock then curl = self:_mock_script() end
     self:exe(curl)
 end
 
@@ -683,11 +685,9 @@ function Openai.embeddings_prompt_tokens(txt)
     local body = {model = "text-embedding-ada-002", input = txt}
     local curl = Openai._get_curl("embeddings", body)
     local acc = ""
-    Subprocess.run {
+    Subprocess.popen {
         cmd = curl,
-        on_start = function() end,
-        on_line = function(line) acc = acc .. " " .. line end,
-        on_end = function() end
+        on_line = function(line) acc = acc .. " " .. line end
     }
     local json = vim.json.decode(acc)
     return tonumber(json.usage.prompt_tokens)
