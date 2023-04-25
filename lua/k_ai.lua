@@ -6,6 +6,7 @@
 ---@field debug boolean
 ---
 ---@field cache_dir string
+---@field chat_use string
 ---@field chat_max_tokens integer
 ---@field chat_temperature number
 ---@field completions_max_tokens integer
@@ -15,10 +16,11 @@
 ---@field temperature number
 ---@field timeout integer Timeout in seconds
 local config_defaults = {
-    mock = nil,
+    mock = "",
     debug = false,
     --
     cache_dir = vim.fn.stdpath('cache') .. "/k_ai/",
+    chat_use = "default",
     chat_max_tokens = 4000,
     chat_temperature = 0,
     completions_max_tokens = 2048,
@@ -34,7 +36,10 @@ local config_defaults = {
 local config = setmetatable({}, {
     -- Dynamically get values from global options when evaluated.
     __index = function(_, key)
-        return vim.g["ai_" .. key] or config_defaults[key]
+        local ret = vim.g["ai_" .. key] or config_defaults[key]
+        assert(ret ~= nil,
+               ("There is no suck key in config: %s %s"):format(key, ret))
+        return ret
     end
 })
 
@@ -275,7 +280,9 @@ function tok.nchars_to_ntokens_approx(str)
     local init_offset = math.max(0, math.floor(nwords * 0.5))
     -- Calculate the number of tokens.
     -- returns an estimate of #tokens corresponding to #characters nchars
-    return math.max(0, math.floor((str:len() - init_offset) * math.exp(-1)))
+    local scale = 1.2
+    local ret = (str:len() - init_offset) * math.exp(-1) * scale
+    return math.max(0, math.floor(ret))
 end
 
 -- }}}
@@ -289,9 +296,8 @@ local chatFileVersion = 0
 
 -- Global array of all chat messages in the "chat" format.
 ---@class Chat
----@field use string Currently used chat.
 ---@field private ms {role: string, content: string}[]? Chat messages with ChatGPT
-local chat = {use = "default", ms = nil}
+local chat = {ms = nil}
 
 ---@type Chat
 local chatDefaultMs = {
@@ -347,7 +353,9 @@ end
 
 ---@return {role: string, content: string}[]
 function chat:get_messages()
-    if not self.ms then if not chat:_load() then self.ms = chatDefaultMs end end
+    if not self.ms then
+        if not chat:_load() and not self.ms then self.ms = chatDefaultMs end
+    end
     self:_trim_messages_to_tokens()
     return self.ms
 end
@@ -355,13 +363,28 @@ end
 ---@private
 ---@return string
 function chat:file()
-    return ('%s/chat-%s.json'):format(config.cache_dir, chat.use)
+    local file = ('%s/chat-%s.json'):format(config.cache_dir, config.chat_use)
+    file = vim.fn.simplify(file)
+    return file
+end
+
+---@private
+---@return {}
+function chat:serialize() return {version = chatFileVersion, messages = self.ms} end
+
+---@private
+---@param serialized {}
+---@return boolean
+function chat:deserialize(serialized)
+    if serialized.version ~= chatFileVersion then return false end
+    self.ms = serialized.messages
+    return true
 end
 
 --- Save chat history to file.
 ---@return boolean
 function chat:save()
-    if config.mock then return true end
+    if config.mock ~= "" then return true end
     if vim.fn.isdirectory(config.cache_dir) == 0 then
         if vim.fn.mkdir(config.cache_dir, "p") == 0 then
             my.log("Cound not create directory to save chat messages " ..
@@ -374,8 +397,7 @@ function chat:save()
         my.log("could not save chat messages to " .. self:file())
         return false
     end
-    local serialized = {version = chatFileVersion, messages = self.ms}
-    file:write(vim.json.encode(serialized))
+    file:write(vim.json.encode(self:serialize()))
     file:close()
     my.log("saved chat mesages to " .. self:file())
     return true
@@ -393,9 +415,7 @@ function chat:_load()
         return false
     end
     file:close()
-    if serialized.version ~= chatFileVersion then return false end
-    self.ms = serialized.messages
-    return true
+    return self:deserialize(serialized)
 end
 
 function chat:delete()
@@ -416,21 +436,23 @@ end
 ---@param name string
 ---@return boolean
 function chat:set_use(name)
-    chat.use = name
+    vim.g.ai_chat_use = name
     self.ms = nil
     return chat:_load()
 end
 
----@return string[]
+---@return string
 function chat:list()
-    local uses = {}
-    local files = vim.fn.globpath(config.cache_dir, "chat*.json", false, true, false)
+    local ret = ("Using: %s\n"):format(config.chat_use)
+    local files = vim.fn.globpath(config.cache_dir, "chat*.json", false, true,
+                                  false)
     for _, file in pairs(files) do
         local filename = vim.fn.fnamemodify(file, ':t')
-        local use = filename:gsub('^chat', ''):gsub('.json$', '')
-        table.insert(uses, use)
+        local use = filename:gsub('^chat', ''):gsub('[-]', '')
+                        :gsub('.json$', '')
+        ret = ret .. ("%s file=%s filename=%s\n"):format(use, file, filename)
     end
-    return uses
+    return ret
 end
 
 -- {{{1 Subprocess
@@ -614,6 +636,7 @@ end
 ---@param line string
 function Openai:on_line(line)
     my.debug("<", vim.inspect(line))
+    -- print(vim.inspect(line))
     if self.acc ~= "" or vim.startswith(vim.trim(line), "{") then
         -- This is an error response or not streaming response.
         self.acc = self.acc .. line
@@ -688,7 +711,7 @@ end
 ---@param body {}
 function Openai:_request(endpoint, body)
     local curl = self._get_curl(endpoint, body)
-    if config.mock then curl = self:_mock_script() end
+    if config.mock ~= "" then curl = self:_mock_script() end
     self:exe(curl)
 end
 
@@ -851,6 +874,18 @@ function Cmd:openai(replace)
     return Openai.new(Indicator.new(self.buffer, replace))
 end
 
+-- Prefix the string with "prompt ```<filetype>" if prompt is not nil.
+---@param str string
+---@return string
+function Cmd:prefix_with_prompt(str)
+    if self.prompt then
+        local filetype = vim.api.nvim_buf_get_option(self.buffer, "filetype")
+        local promptnl = self.prompt .. "\n\n```" .. filetype .. "\n"
+        str = promptnl .. str
+    end
+    return str
+end
+
 -- {{{1 M.AI
 
 ---@class M
@@ -865,9 +900,9 @@ function M.AI(args, model)
     ---@type string, Region
     local prompt, replace
     if args.range > 0 then
-        assert(not cmd.prompt, "Prompt given with range, either one is needed")
         local context = cmd:get_context()
         prompt = cmd:buffer_get_text(context)
+        prompt = cmd:prefix_with_prompt(prompt)
         -- If the context stops at the end of the line, start the answer with a newline.
         if context.stop.col == cmd:get_row_length(context.stop.row) then
             -- Insert a newline.
@@ -900,12 +935,7 @@ function M.AIA(args)
            "Cursor position has to be inside selected region")
     local prefix = cmd:buffer_get_text(Region.new(context.start, cursor))
     local suffix = cmd:buffer_get_text(Region.new(cursor, context.stop))
-    if cmd.prompt then
-        -- Prefix the selection with "prompt ```<filetype>".
-        local filetype = vim.api.nvim_buf_get_option(cmd.buffer, "filetype")
-        local promptnl = cmd.prompt .. "\n\n```" .. filetype .. "\n"
-        prefix = promptnl .. prefix
-    end
+    prefix = cmd:prefix_with_prompt(prefix)
     -- print(vim.inspect(prefix), vim.inspect(suffix))
     cmd:openai(replace):completions({prompt = prefix, suffix = suffix})
 end
@@ -930,13 +960,11 @@ function M.AIEText(args) M.AIE(args, "text-davinci-edit-001") end
 
 function M.AIChatUse(args)
     if not args.args or args.args:len() == 0 then
-        chat:list()
-        for _, v in pairs(chat:list()) do print(v) end
+        print(chat:list())
     else
         local loaded = chat:set_use(args.args)
-        print(("Using %s chat=%s  file=%s"):format(chat.use,
-                                                   loaded and "loaded" or "new",
-                                                   chat:file()))
+        print(("Using %s chat=%s  file=%s"):format(loaded and "loaded" or "new",
+                                                   config.chat_use, chat:file()))
     end
 end
 
@@ -944,14 +972,17 @@ function M.AIChatHistory(_)
     local ms = chat:get_messages()
     local str = ""
     for _, v in pairs(ms) do str = str .. " " .. v.content end
-    print(
-        ("chat=%s  file=%s  #messages=%d  #approx_tokens=%s  #tokens=%s\n "):format(
-            chat.use, chat:file(), #ms, chat:tokens_cnt(),
-            Openai.embeddings_prompt_tokens(str)))
+    print(("chat=%s  file=%s  Number of messages=%d\n"):format(config.chat_use,
+                                                               chat:file(), #ms))
+    print(("Approximate number of tokens=%s  Number of tokens=%s\n"):format(
+        chat:tokens_cnt(), Openai.embeddings_prompt_tokens(str)))
+    print(" \n")
     for _, v in pairs(ms) do
-        print(("%s(%s)(%s): %s%s"):format(v.role, tok.nchars_to_ntokens_approx(
-                                              v.content), v.content, v.role ==
-                                              ChatRole.assistant and "\n " or ""))
+        print(("%s(%s): %s%s"):format(v.role,
+                                      tok.nchars_to_ntokens_approx(v.content),
+                                      v.content,
+                                      v.role == ChatRole.assistant and "\n " or
+                                          ""))
     end
 end
 
