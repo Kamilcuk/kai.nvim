@@ -43,6 +43,7 @@ local config = setmetatable({}, {
     end
 })
 
+-- }}}
 -- {{{1 utils
 
 ---@class Pos
@@ -108,6 +109,7 @@ function Region:__tostring()
     return ("Region{%s,%s}"):format(self.start, self.stop)
 end
 
+-- }}}
 -- {{{1 my
 
 ---@class my My utils
@@ -166,6 +168,129 @@ end
 
 ---@class Buffer
 
+-- }}}
+-- {{{1 Subprocess
+
+---@class Subprocess
+---@field private cmd string[] The command to run.
+---@field private on_start fun(): nil
+---@field private on_line fun(line: string): nil
+---@field private on_exit fun(code: integer, signal: integer, stderr: string): nil
+Subprocess = {}
+Subprocess.__index = Subprocess
+
+---@param o {cmd: string[], on_start: (fun(): nil), on_line: (fun(line: string): nil), on_exit: (fun(code: integer, signal: integer, stderr: string): nil)}
+function Subprocess.spawn(o)
+    assert(o.cmd)
+    local self = setmetatable(o, Subprocess)
+    self.on_start = self.on_start or function() end
+    self.on_line = self.on_line or function(_) end
+    self.on_exit = self.on_exit or function(_, _, _) end
+    return self:_do_run()
+end
+
+---@param cmd string[]
+---@return string
+function Subprocess.call_output(cmd)
+    local out = ""
+    Subprocess.spawn({
+        cmd = cmd,
+        on_line = function(line)
+            out = out .. (out == "" and "" or "\n") .. line
+        end
+    })
+    return out
+end
+
+---@private
+---@return boolean if the run was successfull and command exited with zero exit status
+function Subprocess:_do_run()
+    local stdout = vim.loop.new_pipe()
+    local stderr_acc = ""
+    local stderr = vim.loop.new_pipe()
+    local pid_or_error
+    self.handle, pid_or_error = vim.loop.spawn(self.cmd[1], {
+        args = vim.list_slice(self.cmd, 2),
+        stdio = {nil, stdout, stderr}
+    }, function(code, signal)
+        stdout:read_stop()
+        stderr:read_stop()
+        my.safe_close(stdout)
+        my.safe_close(stderr)
+        my.safe_close(self.handle)
+        self.on_exit(code, signal, stderr_acc)
+        self.returncode = code
+    end)
+    if not self.handle then
+        local error = pid_or_error
+        my.error(vim.inspect(self.cmd) .. " could not be started: " .. error)
+        return false
+    end
+    self.on_start()
+    --
+    local stdout_line = ""
+    stdout:read_start(function(_, chunk)
+        -- Read output line by line.
+        if not chunk then return end
+        stdout_line = stdout_line .. chunk
+        local line_start, line_end = stdout_line:find("\n")
+        while line_start do
+            local oneline = stdout_line:sub(1, line_end - 1)
+            stdout_line = stdout_line:sub(line_end + 1)
+            if oneline ~= "" then self.on_line(oneline) end
+            line_start, line_end = stdout_line:find("\n")
+        end
+    end)
+    --
+    stderr:read_start(function(_, chunk)
+        -- Accumulate stderr into stderr_chunks.
+        if not chunk then return end
+        stderr_acc = stderr_acc .. chunk
+    end)
+    --
+    local ended, _ = self:_wait(config.timeout * 1000)
+    if not ended then
+        self:_terminate()
+        ended, _ = self:_wait(500)
+        if not ended then self:_kill() end
+    end
+    return self.returncode == 0
+end
+
+---@private
+function Subprocess:_poll() return self.returncode end
+
+---@private
+---@param timeout_ms integer
+---@return boolean, integer See vim.wait doc.
+function Subprocess:_wait(timeout_ms)
+    return vim.wait(timeout_ms, function() return self.returncode ~= nil end)
+end
+
+---@private
+---@param sig integer
+function Subprocess:_send_signal(sig)
+    if self.handle and not self.handle:is_closing() then
+        self.handle:kill(sig)
+    end
+end
+
+---@private
+function Subprocess:_terminate()
+    local SIGTERM = 15
+    self:_send_signal(SIGTERM)
+end
+
+---@private
+function Subprocess:_kill()
+    local SIGKILL = 9
+    self:_send_signal(SIGKILL)
+end
+
+---@private
+function Subprocess:__gc() self:_kill() end
+
+-- }}}
 -- {{{1 Indicator
 
 local indicatorSign = "k_ai_indicator_sign"
@@ -265,6 +390,7 @@ function Indicator:__gc() self:on_complete() end
 
 -- {{{1 Tokenizer
 
+---@class Tokenizer
 local tok = {}
 
 -- Return the number of tokens in a string.
@@ -272,7 +398,7 @@ local tok = {}
 -- https://stackoverflow.com/questions/72294775/how-do-i-know-how-much-tokens-a-gpt-3-request-used
 ---@param str string
 ---@return integer
-function tok.nchars_to_ntokens_approx(str)
+function tok.str_to_ntokens_approx(str)
     -- Count the number of words in str. One word is anything separated by spaces.
     local nwords = 0
     for _ in str:gmatch("%S+") do nwords = nwords + 1 end
@@ -285,24 +411,61 @@ function tok.nchars_to_ntokens_approx(str)
     return math.max(0, math.floor(ret))
 end
 
+---@private
+function tok.has_tiktoken()
+    if vim.g.ai_has_tiktoken == nil then
+        vim.g.ai_has_tiktoken = os.execute('python3 -c "import tiktoken"') == 0
+    end
+    return vim.g.ai_has_tiktoken
+end
+
+---@param str string
+---@return integer
+---@private
+function tok.str_to_ntokens_tiktoken(str)
+    local ret = Subprocess.call_output({
+        "python3", "-c",
+        "import sys,tiktoken;print(len(tiktoken.encoding_for_model(sys.argv[1]).encode(sys.argv[2])))",
+        "gpt-4", str
+    })
+    return tonumber(ret) or 0
+end
+
+---@param str string
+---@return integer
+function tok.str_to_ntokens(str)
+    -- if tok.has_tiktoken() then
+    -- return tok.str_to_ntokens_tiktoken(str)
+    -- else
+    return tok.str_to_ntokens_approx(str)
+    -- end
+end
+
 -- }}}
 -- {{{1 Chat
 
 ---@enum ChatRole Chat roles from OpenAI
 local ChatRole = {assistant = "assistant", system = "system", user = "user"}
 
+---@class ChatMsgType
+---@field role ChatRole
+---@field content string
+
+---@param role string
+---@param content string
+---@return ChatMsgType
+function ChatMsg(role, content) return {role = role, content = content} end
+
 ---@type integer
 local chatFileVersion = 0
 
 -- Global array of all chat messages in the "chat" format.
 ---@class Chat
----@field private ms {role: string, content: string}[]? Chat messages with ChatGPT
+---@field private ms ChatMsgType[]? Chat messages with ChatGPT
 local chat = {ms = nil}
 
----@type Chat
-local chatDefaultMs = {
-    {role = ChatRole.system, content = "You are a helpful assistant."}
-}
+---@type ChatMsgType[]
+local chatDefaultMs = {ChatMsg(ChatRole.system, "You are a helpful assistant.")}
 
 ---@param role ChatRole
 ---@param content string
@@ -316,7 +479,7 @@ function chat:append(role, content)
         assert(vim.tbl_contains(vim.tbl_values(ChatRole), role),
                vim.inspect(role) .. " is not in " .. vim.inspect(ChatRole))
         -- Otherwise, append new element.
-        table.insert(self.ms, {role = role, content = content})
+        table.insert(self.ms, ChatMsg(role, content))
     end
 end
 
@@ -336,7 +499,7 @@ end
 function chat:tokens_cnt()
     local str = ""
     for _, v in pairs(self.ms) do str = str .. " " .. v.content end
-    return tok.nchars_to_ntokens_approx(str)
+    return tok.str_to_ntokens(str)
 end
 
 --- Remove first x messages.
@@ -351,7 +514,7 @@ function chat:_trim_messages_to_tokens()
     while self:tokens_cnt() >= config.chat_max_tokens do self:remove_cnt(1) end
 end
 
----@return {role: string, content: string}[]
+---@return ChatMsgType[]
 function chat:get_messages()
     if not self.ms then
         if not chat:_load() and not self.ms then self.ms = chatDefaultMs end
@@ -434,11 +597,16 @@ function chat:delete()
 end
 
 ---@param name string
+---@param msg string?
 ---@return boolean
-function chat:set_use(name)
+function chat:use(name, msg)
     vim.g.ai_chat_use = name
-    self.ms = nil
-    return chat:_load()
+    if msg and msg ~= "" then
+        self.ms = {ChatMsg(ChatRole.system, msg)}
+        return true
+    else
+        return not chat:_load()
+    end
 end
 
 ---@return string
@@ -455,112 +623,7 @@ function chat:list()
     return ret
 end
 
--- {{{1 Subprocess
-
----@class Subprocess
----@field private cmd string[] The command to run.
----@field private on_start fun(): nil
----@field private on_line fun(line: string): nil
----@field private on_exit fun(code: integer, signal: integer, stderr: string): nil
-Subprocess = {}
-Subprocess.__index = Subprocess
-
----@param o {cmd: string[], on_start: (fun(): nil), on_line: (fun(line: string): nil), on_exit: (fun(code: integer, signal: integer, stderr: string): nil)}
-function Subprocess.popen(o)
-    assert(o.cmd)
-    local self = setmetatable(o, Subprocess)
-    self.on_start = self.on_start or function() end
-    self.on_line = self.on_line or function(_) end
-    self.on_exit = self.on_exit or function(_, _, _) end
-    self:_do_run()
-end
-
----@private
-function Subprocess:_do_run()
-    local stdout = vim.loop.new_pipe()
-    local stderr_acc = ""
-    local stderr = vim.loop.new_pipe()
-    local pid_or_error
-    self.handle, pid_or_error = vim.loop.spawn(self.cmd[1], {
-        args = vim.list_slice(self.cmd, 2),
-        stdio = {nil, stdout, stderr}
-    }, function(code, signal)
-        stdout:read_stop()
-        stderr:read_stop()
-        my.safe_close(stdout)
-        my.safe_close(stderr)
-        my.safe_close(self.handle)
-        self.on_exit(code, signal, stderr_acc)
-        self.returncode = code
-    end)
-    if not self.handle then
-        local error = pid_or_error
-        my.error(vim.inspect(self.cmd) .. " could not be started: " .. error)
-        return
-    end
-    self.on_start()
-    --
-    local stdout_line = ""
-    stdout:read_start(function(_, chunk)
-        -- Read output line by line.
-        if not chunk then return end
-        stdout_line = stdout_line .. chunk
-        local line_start, line_end = stdout_line:find("\n")
-        while line_start do
-            local oneline = stdout_line:sub(1, line_end - 1)
-            stdout_line = stdout_line:sub(line_end + 1)
-            if oneline ~= "" then self.on_line(oneline) end
-            line_start, line_end = stdout_line:find("\n")
-        end
-    end)
-    --
-    stderr:read_start(function(_, chunk)
-        -- Accumulate stderr into stderr_chunks.
-        if not chunk then return end
-        stderr_acc = stderr_acc .. chunk
-    end)
-    --
-    local ended, _ = self:wait(config.timeout * 1000)
-    if not ended then
-        self:terminate()
-        ended, _ = self:wait(500)
-        if not ended then self:kill() end
-    end
-end
-
----@private
-function Subprocess:poll() return self.returncode end
-
----@private
----@param timeout_ms integer
----@return boolean, integer See vim.wait doc.
-function Subprocess:wait(timeout_ms)
-    return vim.wait(timeout_ms, function() return self.returncode ~= nil end)
-end
-
----@private
----@param sig integer
-function Subprocess:send_signal(sig)
-    if self.handle and not self.handle:is_closing() then
-        self.handle:kill(sig)
-    end
-end
-
----@private
-function Subprocess:terminate()
-    local SIGTERM = 15
-    self:send_signal(SIGTERM)
-end
-
----@private
-function Subprocess:kill()
-    local SIGKILL = 9
-    self:send_signal(SIGKILL)
-end
-
----@private
-function Subprocess:__gc() self:kill() end
-
+-- }}}
 -- {{{1 OpenAI
 
 ---@class Openai
@@ -580,7 +643,7 @@ end
 
 ---@param cmd string[] The command to run.
 function Openai:exe(cmd)
-    Subprocess.popen {
+    Subprocess.spawn {
         cmd = cmd,
         on_start = function() self.cb:on_start() end,
         on_line = function(line) self:on_line(line) end,
@@ -740,11 +803,7 @@ end
 function Openai.embeddings_prompt_tokens(txt)
     local body = {model = "text-embedding-ada-002", input = txt}
     local curl = Openai._get_curl("embeddings", body)
-    local acc = ""
-    Subprocess.popen {
-        cmd = curl,
-        on_line = function(line) acc = acc .. " " .. line end
-    }
+    local acc = Subprocess.call_output(curl)
     local json = vim.json.decode(acc)
     return tonumber(json.usage.prompt_tokens)
 end
@@ -763,6 +822,7 @@ function Openai:chat(message, body)
     chat:save()
 end
 
+-- }}}
 -- {{{1 Cmd object
 
 ---@class Args
@@ -886,6 +946,7 @@ function Cmd:prefix_with_prompt(str)
     return str
 end
 
+-- }}}
 -- {{{1 M.AI
 
 ---@class M
@@ -962,9 +1023,16 @@ function M.AIChatUse(args)
     if not args.args or args.args:len() == 0 then
         print(chat:list())
     else
-        local loaded = chat:set_use(args.args)
-        print(("Using %s chat=%s  file=%s"):format(loaded and "loaded" or "new",
-                                                   config.chat_use, chat:file()))
+        local use = args.fargs[1]
+        local msg = table.concat(vim.list_slice(args.fargs, 2), " ")
+        local isnew = chat:use(use, msg)
+        print(("Using %s chat=%s  file=%s  with prompt=%s"):format(isnew and
+                                                                       "new" or
+                                                                       "loaded",
+                                                                   config.chat_use,
+                                                                   chat:file(),
+                                                                   chat:get_messages()[1]
+                                                                       .content))
     end
 end
 
@@ -975,11 +1043,11 @@ function M.AIChatHistory(_)
     print(("chat=%s  file=%s  Number of messages=%d\n"):format(config.chat_use,
                                                                chat:file(), #ms))
     print(("Approximate number of tokens=%s  Number of tokens=%s\n"):format(
-        chat:tokens_cnt(), Openai.embeddings_prompt_tokens(str)))
+              chat:tokens_cnt(), Openai.embeddings_prompt_tokens(str)))
     print(" \n")
     for _, v in pairs(ms) do
         print(("%s(%s): %s%s"):format(v.role,
-                                      tok.nchars_to_ntokens_approx(v.content),
+                                      tok.str_to_ntokens_approx(v.content),
                                       v.content,
                                       v.role == ChatRole.assistant and "\n " or
                                           ""))
