@@ -351,7 +351,9 @@ function Indicator:on_data(data)
                               self.reg.stop.col, lines)
     -- Calculate new region stop with the filled text.
     local stop_row = self.reg.start.row + #lines - 1
-    self.reg.stop = Pos:new0(stop_row, my.get_row_length(self.buffer, stop_row))
+    local stop_col = #lines == 1 and (self.reg.stop.col + lines[1]:len()) or
+                         my.get_row_length(self.buffer, stop_row)
+    self.reg.stop = Pos:new0(stop_row, stop_col)
     self.reg:assert()
     -- Place new signs between start.row and stop.row if there were any newlines.
     self:_place_signs(self.reg.start.row, self.reg.stop.row)
@@ -941,7 +943,7 @@ function Cmd:get_context()
         after = Pos:new0(stop_row, stop_row_length)
     end
     my.log(
-        ("Genering completion from %d lines above and %d lines below"):format(
+        ("Generating completion from %d lines above and %d lines below"):format(
             math.abs(cursor.row - before.row), math.abs(cursor.row - after.row)))
     return Region.new(before, after)
 end
