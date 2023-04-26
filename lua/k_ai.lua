@@ -1013,7 +1013,7 @@ function M.AIE(args, model)
     cmd:openai(context):edits({
         model = model,
         input = selected_text,
-        instruction = ""
+        instruction = cmd.prompt
     })
 end
 
