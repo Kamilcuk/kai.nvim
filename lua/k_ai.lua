@@ -166,6 +166,12 @@ function my.safe_close(handle)
     if handle and not vim.loop.is_closing(handle) then vim.loop.close(handle) end
 end
 
+function my.pcallprint(fn, ...)
+    local status, err = pcall(fn, unpack({...}))
+    if not status then my.error(err .. "\n" .. debug.traceback()) end
+    return status, err
+end
+
 ---@class Buffer
 
 -- }}}
@@ -174,18 +180,18 @@ end
 ---@class Subprocess
 ---@field private cmd string[] The command to run.
 ---@field private on_start fun(): nil
----@field private on_line fun(line: string): nil
+---@field private on_line fun(line: string, handle: Subprocess): nil
 ---@field private on_exit fun(code: integer, signal: integer, stderr: string): nil
 Subprocess = {}
 Subprocess.__index = Subprocess
 
----@param o {cmd: string[], on_start: (fun(): nil), on_line: (fun(line: string): nil), on_exit: (fun(code: integer, signal: integer, stderr: string): nil)}
+---@param o Subprocess
 function Subprocess.spawn(o)
     assert(o.cmd)
     local self = setmetatable(o, Subprocess)
     self.on_start = self.on_start or function() end
-    self.on_line = self.on_line or function(_) end
-    self.on_exit = self.on_exit or function(_, _, _) end
+    self.on_line = self.on_line or function() end
+    self.on_exit = self.on_exit or function() end
     return self:_do_run()
 end
 
@@ -237,7 +243,12 @@ function Subprocess:_do_run()
         while line_start do
             local oneline = stdout_line:sub(1, line_end - 1)
             stdout_line = stdout_line:sub(line_end + 1)
-            if oneline ~= "" then self.on_line(oneline) end
+            if oneline ~= "" then
+                -- If there is an error in the callback, terminate.
+                if not my.pcallprint(self.on_line, oneline, self) then
+                    self:terminate()
+                end
+            end
             line_start, line_end = stdout_line:find("\n")
         end
     end)
@@ -250,7 +261,7 @@ function Subprocess:_do_run()
     --
     local ended, _ = self:_wait(config.timeout * 1000)
     if not ended then
-        self:_terminate()
+        self:terminate()
         ended, _ = self:_wait(500)
         if not ended then self:_kill() end
     end
@@ -275,8 +286,7 @@ function Subprocess:_send_signal(sig)
     end
 end
 
----@private
-function Subprocess:_terminate()
+function Subprocess:terminate()
     local SIGTERM = 15
     self:_send_signal(SIGTERM)
 end
@@ -646,7 +656,7 @@ function Openai:exe(cmd)
     Subprocess.spawn {
         cmd = cmd,
         on_start = function() self.cb:on_start() end,
-        on_line = function(line) self:on_line(line) end,
+        on_line = function(line, handle) self:on_line(line, handle) end,
         on_exit = function(code, _, stderr)
             if code == 0 then
                 self:on_exit()
@@ -661,7 +671,8 @@ end
 ---Handle json decoding error or a good json response.
 ---@private
 ---@param txt string
-function Openai:handle_response(txt)
+---@param handle Subprocess?
+function Openai:handle_response(txt, handle)
     local success, json = pcall(vim.json.decode, txt)
     if not success then
         my.error("Could not decode json: " .. vim.inspect(txt))
@@ -697,7 +708,8 @@ end
 
 ---@private
 ---@param line string
-function Openai:on_line(line)
+---@param handle Subprocess
+function Openai:on_line(line, handle)
     my.debug("<", vim.inspect(line))
     -- print(vim.inspect(line))
     if self.acc ~= "" or vim.startswith(vim.trim(line), "{") then
@@ -710,14 +722,20 @@ function Openai:on_line(line)
         line = vim.trim(line:gsub("^data:", ""))
         -- [DONE] means end of parsing.
         if not line or line == "[DONE]" then return end
-        self:handle_response(line)
+        self:handle_response(line, handle)
     end
 end
 
 ---@private
 ---@param txt string
-function Openai:on_data(txt)
-    my.maybe_schedule(function() self.cb:on_data(txt) end)
+---@param handle Subprocess?
+function Openai:on_data(txt, handle)
+    my.maybe_schedule(function()
+        if not my.pcallprint(self.cb.on_data, self.cb, txt) then
+            -- In case the callback fails, terminate curl instead of printing same error over and over again.
+            if handle then handle:terminate() end
+        end
+    end)
 end
 
 ---@private
