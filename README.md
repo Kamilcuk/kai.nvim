@@ -1,4 +1,4 @@
-# 🤖 ai.vim
+# 🤖 kai.nvim
 
 Neovim plugin for generating and editing text using OpenAI.
 
@@ -19,40 +19,88 @@ Export the key in `$OPENAI_API_KEY` environment variable.
 Put this with vim-plug:
 
 ```vim
-Plug 'kamilcuk/ai.vim'
+Plug 'kamilcuk/kai.nvim'
+```
+
+## Options
+
+You can avoid loading the plugin with AI commands by setting `g:kai_loaded = v:true`.
+
+```
+kai_cache_dir string The cache dir used to store conversations history.
+kai_chat_use string The current conversation chat to use.
+kai_chat_max_tokens integer The maximum number of tokens to send to chat/completions API. There is a limit in the API.
+kai_chat_temperature number The temperature option when talking to chat/completions API.
+kai_completions_max_tokens integer The maximum number of tokens to send to completions API.
+kai_context_after integer The default number of lines to send to completions API after cursor.
+kai_context_before integer The default number of lines to send to completione API before cursor.
+kai_indicator_text string The indication to show on the indication panel when working.
+kai_temperature number The temperature to send to other apis except chat/completions API.
+kai_timeout integer Timeout of curl in seconds.
 ```
 
 ## How do I use this?
 
-Read [https://platform.openai.com/docs/guides/code](https://platform.openai.com/docs/guides/code).
+Read [https://platform.openai.com/docs/guides/code](https://platform.openai.com/docs/guides/code)
+on how to write good AI prompts.
+
+### Completion
+
+- `:AIA`
+    - Mnemonic from AI Add.
+    - This is the main command that I use for filling up unfinished functions.
+    - By default takes 20 lines before position and 20 lines after the cursor position.
+    - Sends that to [completions OpenAI API](https://platform.openai.com/docs/api-reference/completions).
+    - The response from API is added into the buffer at cursor position.
+    - Command takes a prompt
+        - `:AIA write code here that changes the world`
+        - The prompt is added to the before part with two newline and three backticks.
+    - Command takes a single number
+        - A single number specifies the number of lines before and after cursor position to send to the API.
+            - `:20AIA` is the default. For example: `:40AIA` `:1000AIA`
+            - The single number does _not_ represent the line number, I decided that is useless.
+    - Command takes a line range
+        - A range specifies the number of lines to send the API.
+            - `:-20,+10AIA` `:%AIA` `:'<,'>AIA`
+            - Takes the selection and split it on cursor position for before and after sections.
+
+### Edit
+
+- `:AIE instruction`
+    - Mnemonic from AI Edit.
+    - Uses [edits OpenAI API](https://platform.openai.com/docs/api-reference/moderations).
+    - Just `:AIA`, by default sends 20 lines before and after cursor position.
+    - Takes prompt sends as instruction.
+    - I typically select text and use `:'<,'>AIE do this`.
+    - `%AIE do this`
+- `:AIEText instruction`
+    - Like `:AIE` but uses `text-davinci-edit-001` model instead of `code-davinci-edit-001`.
+
+### Chat
 
 - `:AI prompt`
-    - Chat with AI using `chats/completions` API.
-    - The response will be printed on cursor position.
-    - The chat conversation history is saved into `g:cache_dir/k_ai/chat.json` file.
-    - The chat history is trimmed to approximate number of tokens
-      to keep below maximum number of tokens allowed and also to reduce number of tokens you pay for.
-          - The calculation of tokens is approximate, because really counting tokens would be too hard.
+    - Chat with AI using [chats/completions OpenAI API](https://platform.openai.com/docs/api-reference/chat/create).
+    - The response will be printed at cursor position.
+    - The chat conversations history is saved into `global.cache_dir/k_ai/chat*.json` files.
+    - Chat history is send to chats/completion API reduced to the `chat_max_tokens` number of tokens.
+        - To keep below maximum number of tokens allowed and also to reduce number of tokens you pay for.
+        - The calculation of tokens is approximate, because really counting tokens would be too hard.
     - I use this for prompting simple stuff, like `:AI how to write lua function that does something...?`
       then I can polish the results by asking follow up questions.
     - I can use this freely, because it does not send company proprietary code to OpenAI.
-    - You can get chat history with `:AIChatHistory`.
+- `:AI4`
+    - Like `:AI` but uses GPT4 instead of cheaper GPT3.
+- `:AIChatUse`
+    - Lists existing chats with names and files where they are saved.
+- `:AIChatUse name`
+    - Selects a chat to use by name.
+- `:AIChatUse name prompt...`
+    - Starts a new chat with specific name and prompt.
+- `:AIChatHistory`
+    - Shows chat history
+- `:AIChatZDelete num|file`
     - You can delete one most earliest prompt from history with `:AIChatZDelete 1`, in case you get "too many tokens" error.
     - You can delete history file with `:AIChatZDelete file`.
-- `:AIA` or `:AIAdd`
-    - Take 20 lines before current position.
-    - Take 20 lines after the cursor position.
-    - Send that to `completions` OpenAI API.
-    - "Add" the response from the completion to the buffer at cursor position.
-    - `:20AIA` or `:40AIA`
-        - The single number does _not_ represent the line number, I decided that is useless.
-        - Uses the single number for the count of lines below and after the cursor position.
-    - `:-20,+10AI` or `:%AI` or `:'<,'>AI`
-        - Take the selection and split it on cursor position for before and after sections..
-- `:\<,\>AIEdit fix spelling` or `:%AIEdit fix spelling`
-   - Take the selected range and sends it to `edits` API with the presented prompt.
-   - Uses `code-davinci-edit-001` model.
-   - There is also `AIEditText` that uses `text-davinci-edit-001` for editing text.
 
 ## Tutorial
 
@@ -70,24 +118,6 @@ Will result in:
 function capitalize (str: string): string {
     return str.charAt(0).toUpperCase() + str.slice(1);
 }
-```
-
-ai.vim isn't just for programming! You can also complete regular human text:
-
-```
-Hey Joe, here are some ideas for slogans for the new petshop. Which do you like best?
-1. <:AI>
-```
-
-Results in:
-
-```
-Hey Joe, here are some ideas for slogans for the new petshop. Which do you like best?
-1. "Where Pets Come First!"
-2. "Your Pet's Home Away From Home!"
-3. "The Best Place for Your Pet!"
-4. "The Pet Store That Cares!"
-5. "The Pet Store That Loves Your Pet!"
 ```
 
 For example:
@@ -123,7 +153,7 @@ body {
 }
 ```
 
-Visually selecting the above CSS and running `:AIEdit convert colors to hex` results in:
+Visually selecting the above CSS and running `:AIE convert colors to hex` results in:
 
 ```css
 body {
@@ -161,3 +191,7 @@ completely wrong. Make sure you carefully proof read and test everything output 
 
 **Privacy**: This plugin sends text to OpenAI when generating completions and edits. Don't use it in
 files containing sensitive information.
+
+## License
+
+See LICENSE.txt

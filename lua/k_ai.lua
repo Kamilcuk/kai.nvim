@@ -1,20 +1,21 @@
 -- Who had fun learning lua? This guy.
 --
 -- {{{1 config
+--
 ---@class Config
 ---@field mock string?
 ---@field debug boolean
 ---
----@field cache_dir string
----@field chat_use string
----@field chat_max_tokens integer
----@field chat_temperature number
----@field completions_max_tokens integer
----@field context_after integer
----@field context_before integer
----@field indicator_text string
----@field temperature number
----@field timeout integer Timeout in seconds
+---@field cache_dir string The cache dir used to store conversations history.
+---@field chat_use string The current conversation chat to use.
+---@field chat_max_tokens integer The maximum number of tokens to send to chat/completions API. There is a limit in the API.
+---@field chat_temperature number The temperature option when talking to chat/completions API.
+---@field completions_max_tokens integer The maximum number of tokens to send to completions API.
+---@field context_after integer The default number of lines to send to completions API after cursor.
+---@field context_before integer The default number of lines to send to completione API before cursor.
+---@field indicator_text string The indication to show on the indication panel when working.
+---@field temperature number The temperature to send to other apis except chat/completions API.
+---@field timeout integer Timeout of curl in seconds.
 local config_defaults = {
     mock = "",
     debug = false,
@@ -36,9 +37,10 @@ local config_defaults = {
 local config = setmetatable({}, {
     -- Dynamically get values from global options when evaluated.
     __index = function(_, key)
-        local ret = vim.g["ai_" .. key] or config_defaults[key]
+        local ret = vim.g["kai_" .. key] or config_defaults[key]
         assert(ret ~= nil,
-               ("There is no suck key in config: %s %s"):format(key, ret))
+               ("Internal error: There is no such key in config: %s %s"):format(
+                   key, ret))
         return ret
     end
 })
@@ -115,7 +117,7 @@ end
 ---@class my My utils
 local my = {}
 
-my.prefix = "ai.vim: "
+my.prefix = "kai.nvim: "
 
 function my.get_row_length(buffer, row)
     return vim.api.nvim_buf_get_lines(buffer, row, row + 1, true)[1]:len()
@@ -178,6 +180,7 @@ end
 -- {{{1 Subprocess
 
 ---@class Subprocess
+---Mimics python subprocess module.
 ---@field private cmd string[] The command to run.
 ---@field private on_start fun(): nil
 ---@field private on_line fun(line: string, handle: Subprocess): nil
@@ -185,13 +188,22 @@ end
 Subprocess = {}
 Subprocess.__index = Subprocess
 
----@param o Subprocess
+---@class SubprocessParam
+---Parameters to construct a subprocess.
+---@field cmd string[] The command to run.
+---@field on_start nil | fun(): nil
+---@field on_line nil | fun(line: string, handle: Subprocess): nil
+---@field on_exit nil | fun(code: integer, signal: integer, stderr: string): nil
+
+---@param o SubprocessParam
 function Subprocess.spawn(o)
     assert(o.cmd)
-    local self = setmetatable(o, Subprocess)
-    self.on_start = self.on_start or function() end
-    self.on_line = self.on_line or function() end
-    self.on_exit = self.on_exit or function() end
+    local self = setmetatable({
+        cmd = o.cmd,
+        on_start = o.on_start or function() end,
+        on_line = o.on_line or function() end,
+        on_exit = o.on_exit or function() end
+    }, Subprocess)
     return self:_do_run()
 end
 
@@ -623,14 +635,29 @@ end
 
 ---@return string
 function chat:list()
-    local ret = ("Using: %s\n"):format(config.chat_use)
     local files = vim.fn.globpath(config.cache_dir, "chat*.json", false, true,
                                   false)
+    ---@type {use: string, file: string}[]
+    local vtable = {}
     for _, file in pairs(files) do
         local filename = vim.fn.fnamemodify(file, ':t')
         local use = filename:gsub('^chat', ''):gsub('[-]', '')
                         :gsub('.json$', '')
-        ret = ret .. ("%s file=%s filename=%s\n"):format(use, file, filename)
+        table.insert(vtable, {use = use, file = file})
+    end
+    -- tabularize
+    ---@type {[0]: integer, [1]: integer}
+    local lens = {}
+    for _, v in ipairs(vtable) do
+        lens.use = math.max(lens.use or 0, v.use:len())
+        lens.file = math.max(lens.file or 0, v.file:len())
+    end
+    -- construct string
+    local ret = ("Using: %s\n"):format(config.chat_use)
+    for _, v in ipairs(vtable) do
+        ret = ret ..
+                  ("%-" .. tostring(lens.use) .. "s %-" .. tostring(lens.file) ..
+                      "s\n"):format(v.use, v.file)
     end
     return ret
 end
