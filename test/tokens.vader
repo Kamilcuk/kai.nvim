@@ -1,0 +1,2 @@
+Execute lua (test):
+  require("kai").tok.test()

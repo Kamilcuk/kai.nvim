@@ -20,7 +20,7 @@ local config_defaults = {
 	mock = "",
 	debug = false,
 	--
-	cache_dir = vim.fn.stdpath("cache") .. "/k_ai/",
+	cache_dir = vim.fn.stdpath("cache") .. "/kai/",
 	chat_use = "default",
 	chat_max_tokens = 4000,
 	chat_temperature = 0,
@@ -38,82 +38,12 @@ local config = setmetatable({}, {
 	-- Dynamically get values from global options when evaluated.
 	__index = function(_, key)
 		local ret = vim.g["kai_" .. key] or config_defaults[key]
-		assert(ret ~= nil, ("Internal error: There is no such key in config: %s %s"):format(key, ret))
+		assert(ret ~= nil, sprintf("Internal error: There is no such key in config: %s %s", key, ret))
 		return ret
 	end,
 })
 
--- }}}
--- {{{1 utils
-
----@class Pos
----@field row integer 0 based
----@field col integer 0 based
-local Pos = {}
-Pos.__index = Pos
-
-function Pos:new0(row, col)
-	return setmetatable({ row = row, col = col }, Pos):assert()
-end
-
-function Pos:assert()
-	assert(self.row >= -1)
-	assert(self.col >= 0)
-	return self
-end
-
----@param tbl_or_row integer[] | integer
----@param col nil | integer
-function Pos:new10(tbl_or_row, col)
-	local row
-	if type(tbl_or_row) == "table" then
-		row = tbl_or_row[1]
-		col = tbl_or_row[2]
-	else
-		row = tbl_or_row
-	end
-	return self:new0(row - 1, col)
-end
-function Pos:get0()
-	return { self.row, self.col }
-end
-function Pos:get10()
-	return { self.row + 1, self.col }
-end
----@param o Pos
-function Pos:copy(o)
-	return Pos:new0(o.row, o.col)
-end
-function Pos:__tostring()
-	return ("Pos{%d,%d}"):format(self.row, self.col)
-end
----@param o Pos
-function Pos:__le(o)
-	return (self.row < o.row) or (self.row == o.row and self.col <= o.col)
-end
-
----@class Region
----@field start Pos
----@field stop Pos
-local Region = {}
-Region.__index = Region
-
----@param start Pos
----@param stop Pos
-function Region.new(start, stop)
-	return setmetatable({ start = start, stop = stop }, Region):assert()
-end
-
-function Region:assert()
-	self.start:assert()
-	self.stop:assert()
-	assert(self.start <= self.stop, ("start has to be before stop: start=%s stop=%s"):format(self.start, self.stop))
-	return self
-end
-
-function Region:__tostring()
-	return ("Region{%s,%s}"):format(self.start, self.stop)
-end
+local myfiletype = "kai_chat"
 
 -- }}}
 -- {{{1 my
@@ -123,6 +53,11 @@ local my = {}
 
 my.prefix = "kai.nvim: "
 
+---@alias Buffer integer
+
+---@param buffer Buffer | integer
+---@param row integer
+---@returns integer
 function my.get_row_length(buffer, row)
 	return vim.api.nvim_buf_get_lines(buffer, row, row + 1, true)[1]:len()
 end
@@ -149,23 +84,28 @@ function my.maybe_schedule(fn, ...)
 	end
 end
 
+---@return boolean
 function my.is_vader_running()
 	return vim.g["vader_bang"] ~= nil
 end
 
-function my.error(...)
+---@param fmt string
+function my.error(fmt, ...)
+	local txt = my.prefix .. fmt:format(...)
 	if my.is_vader_running() then
-		my.maybe_schedule(vim.fn["vader#log"], my.prefix .. my.tostrings(...))
+		my.maybe_schedule(vim.fn["vader#log"], txt)
 	else
-		my.maybe_schedule(vim.api.nvim_err_writeln, my.prefix .. my.tostrings(...))
+		my.maybe_schedule(vim.api.nvim_err_writeln, txt)
 	end
 end
 
-function my.log(...)
+---@param fmt string
+function my.log(fmt, ...)
+	local txt = my.prefix .. fmt:format(...)
 	if my.is_vader_running() then
-		my.maybe_schedule(vim.fn["vader#log"], my.prefix .. my.tostrings(...))
+		my.maybe_schedule(vim.fn["vader#log"], txt)
 	else
-		print(my.prefix .. my.tostrings(...))
+		print(txt)
 	end
 end
 
@@ -181,15 +121,165 @@ function my.safe_close(handle)
 	end
 end
 
+---@param fn function
 function my.pcallprint(fn, ...)
 	local status, err = pcall(fn, unpack({ ... }))
 	if not status then
-		my.error(err .. "\n" .. debug.traceback())
+		my.error("%s\n%s", err, debug.traceback())
 	end
 	return status, err
 end
 
----@class Buffer
+---@param str string
+function my.isempty(str)
+	return str == nil or str == ""
+end
+
+---@param fmt string
+---@return string
+---@diagnostic disable: lowercase-global
+sprintf = function(fmt, ...)
+	return fmt:format(...)
+end
+
+---@param arr any[][]
+---@param format string[]?
+---@return string
+function my.tabularize(arr, format)
+	local sizes = {}
+	for _, row in ipairs(arr) do
+		for i, v in ipairs(row) do
+			sizes[i] = math.max(sizes[i] or 0, tostring(v):len())
+		end
+	end
+	local txt = ""
+	for _, row in ipairs(arr) do
+		for i, v in ipairs(row) do
+			txt = txt
+				.. (i ~= 1 and " " or "")
+				.. sprintf("%" .. (format ~= nil and format[i] or "") .. tostring(sizes[i]) .. "s", tostring(v))
+		end
+		txt = txt .. "\n"
+	end
+	return txt
+end
+
+---@param str string
+---@return string[]
+function my.splitlines(str)
+	local delimiter = "\n"
+	local result = {}
+	local from = 1
+	local delim_from, delim_to = string.find(str, delimiter, from)
+	while delim_from do
+		table.insert(result, string.sub(str, from, delim_from - 1))
+		from = delim_to + 1
+		delim_from, delim_to = string.find(str, delimiter, from)
+	end
+	table.insert(result, string.sub(str, from))
+	return result
+end
+
+-- }}}
+-- {{{1 Pos
+
+---@class Pos
+---@field row integer 0 based
+---@field col integer 0 based
+local Pos = {}
+Pos.__index = Pos
+
+---@param row integer
+---@param col integer
+---@return Pos
+function Pos.new0(row, col)
+	return setmetatable({ row = row, col = col }, Pos):assert()
+end
+
+---@return Pos
+function Pos:assert()
+	assert(self.row >= -1)
+	assert(self.col >= 0)
+	return self
+end
+
+---@param rowcol integer[]
+---@return Pos
+function Pos.new10arr(rowcol)
+	return Pos.new0(rowcol[1] - 1, rowcol[2])
+end
+
+---@param row integer
+---@param col integer
+---@return Pos
+function Pos.new10(row, col)
+	return Pos.new0(row - 1, col)
+end
+
+---@return {[1]: integer, [2]: integer}
+function Pos:get0()
+	return { self.row, self.col }
+end
+
+---@return {[1]: integer, [2]: integer}
+function Pos:get10()
+	return { self.row + 1, self.col }
+end
+
+---@param o Pos
+---@return Pos
+function Pos:copy(o)
+	return Pos.new0(o.row, o.col)
+end
+
+---@return string
+function Pos:__tostring()
+	return sprintf("Pos{%d,%d}", self.row, self.col)
+end
+
+---@return boolean
+---@param o Pos
+function Pos:__le(o)
+	return (self.row < o.row) or (self.row == o.row and self.col <= o.col)
+end
+
+---@param buffer Buffer | integer
+---@return Pos
+function Pos.buffer_end(buffer)
+	local row = vim.api.nvim_buf_line_count(buffer)
+	return Pos.new10(row, my.get_row_length(buffer, row - 1))
+end
+
+-- }}}
+-- {{{1 Region
+
+---@class Region
+---@field start Pos
+---@field stop Pos
+local Region = {}
+Region.__index = Region
+
+---@param start Pos
+---@param stop Pos
+function Region.new(start, stop)
+	return setmetatable({ start = start, stop = stop }, Region):assert()
+end
+
+function Region:assert()
+	self.start:assert()
+	self.stop:assert()
+	assert(self.start <= self.stop, sprintf("start has to be before stop: start=%s stop=%s", self.start, self.stop))
+	return self
+end
+
+function Region:__tostring()
+	return sprintf("Region{%s,%s}", self.start, self.stop)
+end
+
+---@param buffer Buffer
+function Region.buffer(buffer)
+	return Region.new(Pos.new0(0, 0), Pos.buffer_end(buffer))
+end
 
 -- }}}
 -- {{{1 Subprocess
@@ -239,6 +329,7 @@ end
 ---@return boolean if the run was successfull and command exited with zero exit status
 function Subprocess:_do_run()
 	local stdout = vim.loop.new_pipe()
+	local stdout_line = ""
 	local stderr_acc = ""
 	local stderr = vim.loop.new_pipe()
 	local pid_or_error
@@ -251,17 +342,19 @@ function Subprocess:_do_run()
 		my.safe_close(stdout)
 		my.safe_close(stderr)
 		my.safe_close(self.handle)
+		if stdout_line and stdout_line ~= "" then
+			self.on_line(stdout_line, self)
+		end
 		self.on_exit(code, signal, stderr_acc)
 		self.returncode = code
 	end)
 	if not self.handle then
 		local error = pid_or_error
-		my.error(vim.inspect(self.cmd) .. " could not be started: " .. error)
+		my.error("%s could not be started: %s", vim.inspect(self.cmd), error)
 		return false
 	end
 	self.on_start()
 	--
-	local stdout_line = ""
 	stdout:read_start(function(_, chunk)
 		-- Read output line by line.
 		if not chunk then
@@ -342,7 +435,7 @@ end
 -- }}}
 -- {{{1 Indicator
 
-local indicatorSign = "k_ai_indicator_sign"
+local indicatorSign = "kai_indicator_sign"
 
 ---@class Indicator
 ---@field buffer Buffer
@@ -365,7 +458,7 @@ end
 
 ---@private
 function Indicator:__tostring()
-	return ("Indicator{%s,%s}"):format(self.buffer, self.reg)
+	return sprintf("Indicator{%s,%s}", self.buffer, self.reg)
 end
 
 function Indicator:on_start()
@@ -396,7 +489,7 @@ function Indicator:on_data(data)
 	-- Calculate new region stop with the filled text.
 	local stop_row = self.reg.start.row + #lines - 1
 	local stop_col = #lines == 1 and (self.reg.stop.col + lines[1]:len()) or my.get_row_length(self.buffer, stop_row)
-	self.reg.stop = Pos:new0(stop_row, stop_col)
+	self.reg.stop = Pos.new0(stop_row, stop_col)
 	self.reg:assert()
 	-- Place new signs between start.row and stop.row if there were any newlines.
 	self:_place_signs(self.reg.start.row, self.reg.stop.row)
@@ -456,7 +549,7 @@ local tok = {}
 -- https://stackoverflow.com/questions/72294775/how-do-i-know-how-much-tokens-a-gpt-3-request-used
 ---@param str string
 ---@return integer
-function tok.str_to_ntokens_approx(str)
+function tok.count_approx(str)
 	-- Count the number of words in str. One word is anything separated by spaces.
 	local nwords = 0
 	for _ in str:gmatch("%S+") do
@@ -482,7 +575,7 @@ end
 ---@param str string
 ---@return integer
 ---@private
-function tok.str_to_ntokens_tiktoken(str)
+function tok.ntokens_tiktoken(str)
 	local ret = Subprocess.call_output({
 		"python3",
 		"-c",
@@ -493,231 +586,504 @@ function tok.str_to_ntokens_tiktoken(str)
 	return tonumber(ret) or 0
 end
 
+---@return boolean
+function tok.has_perl()
+	return vim.fn.executabe("perl")
+end
+
+---@param str string
+---@param regex string
+---@return integer
+function tok.count_perl(str, regex)
+	--https://community.openai.com/t/what-is-the-openai-algorithm-to-calculate-tokens/58237/33
+	--print join("|", @count), "\n";
+	local perlscript = [=[
+	    local @count = $ARGV[1] =~ /$ARGV[0]/g;
+        print scalar @count;
+    ]=]
+	local out = Subprocess.call_output({
+		"perl",
+		"-e",
+		perlscript,
+		regex,
+		str,
+	})
+	if false then
+		my.log("perl %s", out:gsub("\n", " \\n "))
+		out = out:gsub("^[^\n]*\n", "")
+	end
+	return tonumber(out) or 0
+end
+
+---@param str string
+---@param pattern string
+---@return integer
+function tok.count_vim(str, pattern)
+	if false then
+		local out2 = vim.fn.substitute(str, pattern, "&|", "g")
+		my.log("vim %s", out2)
+	end
+	local out = vim.fn.substitute(str, pattern, "1", "g")
+	return out:len()
+end
+
 ---@param str string
 ---@return integer
-function tok.str_to_ntokens(str)
-	-- if tok.has_tiktoken() then
-	-- return tok.str_to_ntokens_tiktoken(str)
-	-- else
-	return tok.str_to_ntokens_approx(str)
-	-- end
+function tok.count_perl_r50k_base(str)
+	return tok.count_perl(str, [=['s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+]=])
+end
+
+---@param str string
+---@return integer
+function tok.count_vim_r50k_base(str)
+	--Converted from perl regex above.
+	return tok.count_vim(
+		str,
+		[=[\('s\|'t\|'re\|'ve\|'m\|'ll\|'d\| \?[[:alpha:]]\+\| \?[[:digit:]]\+\| \?[^\s[:alnum:]]\+\|\s\+\S\@!\|\s\+\)]=]
+	)
+end
+
+---@param str string
+---@return integer
+function tok.count_perl_cl100k_base(str)
+	return tok.count_perl(
+		str,
+		[=[(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+]=]
+	)
+end
+
+---@param str string
+---@return integer
+function tok.count_vim_cl100k_base(str)
+	--Converted from perl regex above.
+	return tok.count_vim(
+		str,
+		[=[\c\('s\|'t\|'re\|'ve\|'m\|'ll\|'d\|[^\r\n[:alnum:]]\?[[:alpha:]]\+\|[[:digit:]]\{1,3}\| \?[^\s[:alnum:]]\+[\r\n]*\|\s*[\r\n]\+\|\s\+\S\@!\|\s\+\)]=]
+	)
+end
+
+---@param str string
+---@return integer
+function tok.ntokens(str)
+	return tok.count_vim_cl100k_base(str)
+end
+
+---@param messages ChatMsg[]
+---@return integer
+function tok.num_tokens_from_messages(messages)
+	-- based on num_tokens_from_messages from
+	-- https://github.com/openai/openai-cookbook/blob/main/examples/How_to_count_tokens_with_tiktoken.ipynb
+	local tokens_per_message = 3
+	-- every reply is primed with <|start|>assistant<|message|>
+	local num_tokens = 3
+	for _, m in ipairs(messages) do
+		num_tokens = num_tokens + tokens_per_message + tok.ntokens(m.role) + tok.ntokens(m.content)
+	end
+	return num_tokens
+end
+
+-- Returns number of most recent messages with number of tokens lower than max.
+---@param messages ChatMsg[]
+---@param max integer
+---@return ChatMsg[]
+function tok.trim_messages_to_num_tokens(messages, max)
+	-- based on the above num_tokens_from_messages
+	-- assuming not gpt-3.5-turbo-0301
+	-- every message follows <|start|>{role/name}\n{content}<|end|>\n
+	local tokens_per_message = 3
+	-- every reply is primed with <|start|>assistant<|message|>
+	local num_tokens = 3
+	local ret = {}
+	for i = #messages, 1, -1 do
+		local m = messages[i]
+		num_tokens = num_tokens + tokens_per_message + tok.ntokens(m.role) + tok.ntokens(m.content)
+		if num_tokens >= max then
+			break
+		end
+		table.insert(ret, 1, m)
+	end
+	return ret
+end
+
+---@param func fun(string): integer
+---@return string
+function tok.get_func_name(func)
+	local info = debug.getinfo(func)
+	if info.name then
+		return info.name
+	end
+	local source = info.source:gsub("^@", "")
+	local f = io.open(source, "r")
+	assert(f)
+	local count = 1
+	for line in f:lines() do
+		if count == info.linedefined then
+			f:close()
+			return line:gsub([[function *tok.count_]], ""):gsub("[(].*$", "")
+		end
+		count = count + 1
+	end
+	f:close()
+	error("not enough lines in file")
+end
+
+---@param func fun(string): integer
+---@param str string
+---@param val integer
+---@return integer
+function tok._test(func, str, val)
+	local res = func(str)
+	local name = tok.get_func_name(func)
+	local err = res ~= val
+	local pre = err and "DIFF:" or ""
+	local eq = err and "!=" or "=="
+	local desc = sprintf("%5s %18s(%q) = %d %s %d", pre, name, str, res, eq, val)
+	my.log("%s", desc)
+	return err and 1 or 0
+end
+
+function tok.test()
+	---@type {[1]: string, [2]: integer}[]
+	local tests = {
+		{ " a", 1 },
+		{ "a ", 2 },
+		{ "a b", 2 },
+		{ "a b ", 3 },
+		{ "a b c", 3 },
+		{ "12345647657", 5 },
+		{ "abcdef 12345647657 ;',./pl[flewq'l abc'l", 21 },
+		{ "You miss 100% of the shots you don't take", 13 },
+		{ "You miss 100% of the shots you don’t take", 13 },
+	}
+	---@type (fun(string): integer)[]
+	local backends = {
+		tok.count_approx,
+		tok.count_perl_cl100k_base,
+		tok.count_vim_cl100k_base,
+		tok.count_perl_r50k_base,
+		tok.count_vim_r50k_base,
+	}
+	local errors = 0
+	for _, test in ipairs(tests) do
+		for _, backend in ipairs(backends) do
+			errors = errors + tok._test(backend, test[1], test[2])
+		end
+	end
+	assert(errors == 0)
 end
 
 -- }}}
--- {{{1 Chat
+-- {{{1 ChatRole
 
 ---@enum ChatRole Chat roles from OpenAI
 local ChatRole = { assistant = "assistant", system = "system", user = "user" }
 
----@class ChatMsgType
+---@param str string
+---@return boolean
+function ChatRole.is(str)
+	return vim.tbl_contains(vim.tbl_values(ChatRole), str)
+end
+
+---@type integer
+ChatRole.maxlen = ChatRole.assistant:len()
+
+local chatRoles = { ChatRole.assistant, ChatRole.system, ChatRole.user }
+
+-- }}}
+-- {{{1 Chat
+
+---@class ChatMsg
 ---@field role ChatRole
 ---@field content string
 
+---@class ChatFile
+---@field version integer
+---@field messages ChatMsg[]
+
 ---@param role string
 ---@param content string
----@return ChatMsgType
+---@return ChatMsg
 function ChatMsg(role, content)
 	return { role = role, content = content }
 end
 
----@type integer
-local chatFileVersion = 0
+---@class Chat Global array of all chat messages in the "chat" format.
+---@field name string
+---@field ms ChatMsg[] Chat messages with ChatGPT
+local Chat = {}
+Chat.__index = Chat
 
--- Global array of all chat messages in the "chat" format.
----@class Chat
----@field private ms ChatMsgType[]? Chat messages with ChatGPT
-local chat = { ms = nil }
+---@type string
+local chatDefaultInitMsg = "You are a helpful assistant."
 
----@type ChatMsgType[]
-local chatDefaultMs = { ChatMsg(ChatRole.system, "You are a helpful assistant.") }
+-- Chat constructor
+---@param name string
+---@param initmsg string?
+---@return Chat
+function Chat.new(name, initmsg)
+	assert(name:find("/") == nil, "Chat name can't contain /: " .. name)
+	return setmetatable({
+		name = name,
+		ms = { ChatMsg(ChatRole.system, initmsg or chatDefaultInitMsg) },
+	}, Chat)
+end
 
 ---@param role ChatRole
 ---@param content string
-function chat:append(role, content)
-	-- Load messages from file on startup.
-	chat:get_messages()
+function Chat:append(role, content)
 	-- Accumulate multiple assistant responses into single content.
 	if self.ms[#self.ms].role == role then
 		self.ms[#self.ms].content = self.ms[#self.ms].content .. content
 	else
-		assert(
-			vim.tbl_contains(vim.tbl_values(ChatRole), role),
-			vim.inspect(role) .. " is not in " .. vim.inspect(ChatRole)
-		)
+		assert(ChatRole.is(role), vim.inspect(role) .. " is not in " .. vim.inspect(ChatRole))
 		-- Otherwise, append new element.
 		table.insert(self.ms, ChatMsg(role, content))
 	end
 end
 
 ---@param content string
-function chat:append_user(content)
+function Chat:append_user(content)
 	self:append(ChatRole.user, content)
 end
 
 -- Get last character sent by assistant.
 ---@return string?
-function chat:last_assistant_character()
+function Chat:last_assistant_character()
 	if #self.ms ~= 0 and self.ms[#self.ms].role == ChatRole.assistant then
 		return self.ms[#self.ms].content:sub(-1)
 	end
 end
 
--- Count approximate number of tokens in the chat.
----@return integer
-function chat:tokens_cnt()
-	local str = ""
-	for _, v in pairs(self.ms) do
-		str = str .. " " .. v.content
-	end
-	return tok.str_to_ntokens(str)
-end
-
---- Remove first x messages.
----@param x integer
-function chat:remove_cnt(x)
-	for _ = 1, x do
-		table.remove(self.ms, 2)
-	end
-end
-
--- Trim messages to config.chat_max_tokens tokens.
----@private
-function chat:_trim_messages_to_tokens()
+-- Get messages trimmed to config.chat_max_tokens tokens.
+---@return ChatMsg[]
+function Chat:get_trimmed_messages()
 	assert(config.chat_max_tokens >= 0)
-	if config.chat_max_tokens == 0 then
-		return
-	end
-	while self:tokens_cnt() >= config.chat_max_tokens do
-		self:remove_cnt(1)
-	end
+	local ms = tok.trim_messages_to_num_tokens(self.ms, config.chat_max_tokens)
+	assert(#ms > 0, "Your query was longer that the g:kai_chat_max_tokens!")
+	return ms
 end
 
----@return ChatMsgType[]
-function chat:get_messages()
-	if not self.ms then
-		if not chat:_load() and not self.ms then
-			self.ms = chatDefaultMs
+---@return string?
+function Chat:get_system_message()
+	for _, v in ipairs(self.ms) do
+		if v.role == ChatRole.system then
+			return v.content
 		end
 	end
-	self:_trim_messages_to_tokens()
-	return self.ms
 end
+
+---@return integer
+function Chat:ntokens()
+	return tok.num_tokens_from_messages(self.ms)
+end
+
+---@return string
+function Chat:to_text()
+	local data = "Chat name=" .. self.name .. " file=" .. self:file() .. "\n"
+	local n = tostring(ChatRole.maxlen)
+	for i, msg in ipairs(self.ms) do
+		local ntokens = tok.ntokens(msg.content) + 3
+		local new
+		if false then
+			new = sprintf("+++ %d %" .. n .. "s (%d tokens)\n%s\n", i, msg.role, ntokens, msg.content)
+		else
+			local pre = sprintf("%" .. n .. "s ", msg.role)
+			local content = table.concat(my.splitlines(msg.content), sprintf("\n%" .. #pre .. "s", ""))
+			new = pre .. content .. "\n"
+		end
+		data = data .. new
+	end
+	return data
+end
+
+---@param buffer Buffer | integer
+function Chat:show_chat(buffer)
+	buffer = buffer or 0
+	local bufname = vim.fn.bufname(buffer)
+	local chat_system_sign = "kai_system"
+	local chat_user_sign = "kai_user"
+	local chat_assistant_sign = "kai_assistant"
+	local signgroup = "kai_chat"
+	vim.fn.sign_define(chat_system_sign, { text = "🖥" })
+	vim.fn.sign_define(chat_user_sign, { text = "👤" })
+	vim.fn.sign_define(chat_assistant_sign, { text = "🤖" })
+	-- Remove all signs in current buffer
+	local signs = vim.fn.sign_getplaced(bufname, { group = signgroup })[1].signs
+	local signlist = {}
+	for _, v in ipairs(signs) do
+		table.insert(signlist, { buffer = buffer, group = indicatorSign, id = v })
+	end
+	vim.fn.sign_unplacelist(signlist)
+	--
+	local txt = "Chat name=" .. self.name .. " file=" .. self:file() .. "\n"
+	local toplace = {}
+	local lines = {}
+	for _, m in ipairs(self.ms) do
+		local who = m.role
+		local signname = "kai_" .. m.role
+		for row, line in ipairs(my.splitlines(m.content)) do
+			table.insert(toplace, {
+				buffer = bufname,
+				group = signgroup,
+				lnum = #lines + 1,
+				name = signname,
+			})
+			table.insert(lines, line)
+		end
+	end
+    table.insert(lines, "")
+	--
+	vim.api.nvim_buf_set_lines(buffer, 0, -1, true, lines)
+	vim.api.nvim_win_set_cursor(buffer, { #lines, 0 })
+	vim.fn.sign_placelist(toplace)
+	vim.cmd.redraw()
+end
+
+-- }}}
+-- {{{1 Chat file ops
+
+---@type integer
+local chatFileVersion = 1
 
 ---@private
 ---@return string
-function chat:file()
-	local file = ("%s/chat-%s.json"):format(config.cache_dir, config.chat_use)
-	file = vim.fn.simplify(file)
-	return file
+function Chat.filename(name)
+	return vim.fn.simplify(sprintf("%s/chat-%s.json", config.cache_dir, name))
+end
+
+---@return string
+function Chat:file()
+	return Chat.filename(self.name)
 end
 
 ---@private
----@return {}
-function chat:serialize()
-	return { version = chatFileVersion, messages = self.ms }
-end
-
----@private
----@param serialized {}
----@return boolean
-function chat:deserialize(serialized)
-	if serialized.version ~= chatFileVersion then
-		return false
+---@param filename string
+---@return string?, ChatMsg[]?
+function Chat._load(filename)
+	local file = io.open(filename, "r")
+	if not file then
+		return nil, nil
 	end
-	self.ms = serialized.messages
-	return true
+	local success, serialized = pcall(vim.json.decode, file:read("*all"))
+	if not success then
+		return "json decode error"
+	end
+	file:close()
+	if serialized.version ~= chatFileVersion then
+		return sprintf("version %s != %d", tostring(serialized.version), chatFileVersion)
+	end
+	---@type ChatMsg[]
+	local ms = serialized.ms
+	if ms == nil or type(ms) ~= "table" or #ms == 0 then
+		return sprintf("invalid content ms=%s", vim.inspect(serialized.ms))
+	end
+	for i, v in ipairs(serialized.ms) do
+		if
+			v.content == nil
+			or type(v.content) ~= "string"
+			or v.role == nil
+			or type(v.role) ~= "string"
+			or not ChatRole.is(v.role)
+		then
+			return sprintf("invalid message number %d in file=%s", i, filename)
+		end
+	end
+	return nil, ms
+end
+
+-- Loads chat messages history from file.
+-- Constructor
+---@param name string
+function Chat.load(name)
+	local ret = Chat.new(name)
+	local filename = Chat.filename(name)
+	local err, ms = Chat._load(filename)
+	if ms == nil and err == nil then
+		my.log("Started new chat at %s", filename)
+	elseif err ~= nil then
+		my.error("Error loading file %s: %s", filename, err)
+	end
+	if ms ~= nil then
+		ret.ms = ms
+	end
+	return ret
+end
+
+function Chat.assert_exists(name)
+	assert(
+		vim.tbl_contains(Chat.listnames(), name),
+		sprintf("There is no chat with name %s at %s", name, config.cache_dir)
+	)
+end
+
+---@private
+---@return ChatFile
+function Chat:_serialize()
+	return { version = chatFileVersion, ms = self.ms }
 end
 
 --- Save chat history to file.
 ---@return boolean
-function chat:save()
+function Chat:save()
 	if config.mock ~= "" then
 		return true
 	end
 	if vim.fn.isdirectory(config.cache_dir) == 0 then
 		if vim.fn.mkdir(config.cache_dir, "p") == 0 then
-			my.log("Cound not create directory to save chat messages " .. config.cache_dir)
+			my.log("Cound not create directory to save chat messages %s", config.cache_dir)
 			return false
 		end
 	end
-	local file = io.open(self:file(), "w")
+	-- Save to temporary file
+	local tmpfile = self:file() .. ".tmp"
+	local file = io.open(tmpfile, "w")
 	if not file then
-		my.log("could not save chat messages to " .. self:file())
+		my.log("could not save chat messages to %s", self:file())
 		return false
 	end
-	file:write(vim.json.encode(self:serialize()))
+	file:write(vim.json.encode(self:_serialize()))
 	file:close()
-	my.log("saved chat mesages to " .. self:file())
+	-- Atomically rename.
+	os.rename(tmpfile, self:file())
+	my.debug("saved chat mesages to " .. self:file())
 	return true
 end
 
--- Loads chat messages history from file.
----@private
----@return boolean
-function chat:_load()
-	local file = io.open(self:file(), "r")
-	if not file then
-		return false
-	end
-	local success, serialized = pcall(vim.json.decode, file:read("*all"))
-	if not success then
-		my.error("Could not json decode file " .. self:file())
-		return false
-	end
-	file:close()
-	return self:deserialize(serialized)
-end
-
-function chat:delete()
+function Chat:delete()
 	if not vim.fn.filereadable(self:file()) then
-		my.log("File " .. self:file() .. " does not exist.")
+		my.log("file does not exists: %s", self:file())
 		return
 	end
 	if vim.fn.confirm("Do you really want to delete " .. self:file() .. "?") == 0 then
 		return
 	end
 	if vim.fn.delete(self:file()) ~= 0 then
-		my.log("Could not delete " .. self:file())
+		my.log("Could not delete %s", self:file())
 	else
-		my.log("Removed file " .. self:file())
+		my.log("Removed file %s", self:file())
 		self.ms = nil
 	end
 end
 
----@param name string
----@param msg string?
----@return boolean
-function chat:use(name, msg)
-	vim.g.ai_chat_use = name
-	if msg and msg ~= "" then
-		self.ms = { ChatMsg(ChatRole.system, msg) }
-		return true
-	else
-		return not chat:_load()
-	end
-end
-
----@return string
-function chat:list()
+---@return {name: string, file: string}[]
+function Chat.list()
 	local files = vim.fn.globpath(config.cache_dir, "chat*.json", false, true, false)
-	---@type {use: string, file: string}[]
-	local vtable = {}
+	local ret = {}
 	for _, file in pairs(files) do
 		local filename = vim.fn.fnamemodify(file, ":t")
-		local use = filename:gsub("^chat", ""):gsub("[-]", ""):gsub(".json$", "")
-		table.insert(vtable, { use = use, file = file })
+		local name = filename:gsub("^chat", ""):gsub("[-]", ""):gsub(".json$", "")
+		table.insert(ret, { name = name, file = file })
 	end
-	-- tabularize
-	---@type {[0]: integer, [1]: integer}
-	local lens = {}
-	for _, v in ipairs(vtable) do
-		lens.use = math.max(lens.use or 0, v.use:len())
-		lens.file = math.max(lens.file or 0, v.file:len())
-	end
-	-- construct string
-	local ret = ("Using: %s\n"):format(config.chat_use)
-	for _, v in ipairs(vtable) do
-		ret = ret .. ("%-" .. tostring(lens.use) .. "s %-" .. tostring(lens.file) .. "s\n"):format(v.use, v.file)
+	return ret
+end
+
+---@return string[]
+function Chat.listnames()
+	local ret = {}
+	for _, v in pairs(Chat.list()) do
+		if v.name and v.name ~= "" then
+			table.insert(ret, v.name)
+		end
 	end
 	return ret
 end
@@ -728,7 +1094,7 @@ end
 ---@class Openai
 ---@field private cb Indicator
 ---@field private acc string
----@field private is_chat boolean
+---@field private chatobj Chat?
 ---@field private tokens integer
 local Openai = {}
 Openai.__index = Openai
@@ -753,7 +1119,7 @@ function Openai:exe(cmd)
 			if code == 0 then
 				self:on_exit()
 			else
-				my.error(vim.inspect(cmd) .. " " .. stderr)
+				my.error("%s %s", vim.inspect(cmd), stderr)
 			end
 			vim.schedule(function()
 				self.cb:on_complete()
@@ -769,13 +1135,13 @@ end
 function Openai:handle_response(txt, handle)
 	local success, json = pcall(vim.json.decode, txt)
 	if not success then
-		my.error("Could not decode json: " .. vim.inspect(txt))
+		my.error("Could not decode json: %s", vim.inspect(txt))
 	elseif type(json) ~= "table" then
-		my.error("Not a JSON dictionary: " .. vim.inspect(txt))
+		my.error("Not a JSON dictionary: %s", vim.inspect(txt))
 	elseif json.error and type(json.error) == "table" and json.error.message then
 		my.error(json.error.message)
 	elseif not json.choices then
-		my.error("No choices in response: " .. vim.inspect(txt))
+		my.error("No choices in response: %s", vim.inspect(txt))
 	elseif json.choices[1].text then
 		-- Response from completions and edits no-stream endpoint.
 		self:on_data(json.choices[1].text)
@@ -787,16 +1153,16 @@ function Openai:handle_response(txt, handle)
 		if json.choices[1].delta.content then
 			self.tokens = self.tokens + 1
 			local content = json.choices[1].delta.content
-			chat:append(self.delta_role, content)
+			self.chatobj:append(self.delta_role, content)
 			self:on_data(content)
 		end
 	elseif json.choices[1].message then
 		-- Response from chat endpoint no-stream.
 		local msg = json.choices[1].message
-		chat:append(msg.role, msg.content)
+		self.chatobj:append(msg.role, msg.content)
 		self:on_data(msg.content)
 	else
-		my.error("Could not parse response: " .. vim.inspect(txt))
+		my.error("Could not parse response: %s", vim.inspect(txt))
 	end
 end
 
@@ -810,7 +1176,7 @@ function Openai:on_line(line, handle)
 		-- This is an error response or not streaming response.
 		self.acc = self.acc .. line
 	elseif not vim.startswith(line, "data: ") then
-		my.error("Response from API does not start with data: " .. vim.inspect(line))
+		my.error("Response from API does not start with data: %s", vim.inspect(line))
 	else
 		line = vim.trim(line:gsub("^data:", ""))
 		-- [DONE] means end of parsing.
@@ -839,9 +1205,9 @@ end
 function Openai:on_exit()
 	if self.acc ~= "" then
 		self:handle_response(self.acc)
-	elseif self.is_chat then
+	elseif self.chatobj ~= nil then
 		-- When using chat completion add an additional trailing newline to have the cursor ending on the next line.
-		if chat:last_assistant_character() ~= "\n" then
+		if self.chatobj:last_assistant_character() ~= "\n" then
 			self:on_data("\n")
 		end
 	end
@@ -941,18 +1307,17 @@ function Openai.embeddings_prompt_tokens(txt)
 	return tonumber(json.usage.prompt_tokens)
 end
 
----@param message string
+---@param chat Chat
 ---@param body {model: string}
-function Openai:chat(message, body)
-	self.is_chat = true
-	chat:append_user(message)
+function Openai:chat(chat, body)
+	self.chatobj = chat
 	body = vim.tbl_extend("keep", body, {
-		messages = chat:get_messages(),
+		messages = self.chatobj:get_trimmed_messages(),
 		temperature = config.chat_temperature,
 		stream = true,
 	})
 	self:_request("chat/completions", body)
-	chat:save()
+	self.chatobj:save()
 end
 
 -- }}}
@@ -1007,7 +1372,7 @@ end
 ---@private
 ---@return Pos Position of the cursor.
 function Cmd:_get_cursor()
-	local o = Pos:new10(vim.api.nvim_win_get_cursor(0))
+	local o = Pos.new10arr(vim.api.nvim_win_get_cursor(0))
 	-- Get the position after cursor.
 	-- If the current line is empty, then the cursor starts at zero position.
 	-- If the current line is not empty, start with the place _after_ the cursor.
@@ -1026,8 +1391,8 @@ function Cmd:get_context()
 	---@type Pos, Pos
 	local before, after
 	if args.range == 2 then
-		local start = Pos:new10(vim.api.nvim_buf_get_mark(buffer, "<"))
-		local stop = Pos:new10(vim.api.nvim_buf_get_mark(buffer, ">"))
+		local start = Pos.new10arr(vim.api.nvim_buf_get_mark(buffer, "<"))
+		local stop = Pos.new10arr(vim.api.nvim_buf_get_mark(buffer, ">"))
 		-- If last selection was line or character based and the range
 		-- passed to args match the selection, then use selection,
 		-- otherwise use range.
@@ -1041,8 +1406,8 @@ function Cmd:get_context()
 			stop.col = math.min(stop.col, end_line_length)
 		else
 			-- Range mode, take whole lines.
-			start = Pos:new10(args.line1, 0)
-			stop = Pos:new10(args.line2, self:get_row_length(args.line2 - 1))
+			start = Pos.new10(args.line1, 0)
+			stop = Pos.new10(args.line2, self:get_row_length(args.line2 - 1))
 		end
 		before = start
 		after = stop
@@ -1052,18 +1417,17 @@ function Cmd:get_context()
 		local context_after = one_arg or config.context_after
 		--
 		local start_row = math.max(0, cursor.row - context_before)
-		before = Pos:new0(start_row, 0)
+		before = Pos.new0(start_row, 0)
 		--
 		local buffer_line_count = vim.api.nvim_buf_line_count(self.buffer)
 		local stop_row = math.min(cursor.row + context_after, buffer_line_count - 1)
 		local stop_row_length = self:get_row_length(stop_row)
-		after = Pos:new0(stop_row, stop_row_length)
+		after = Pos.new0(stop_row, stop_row_length)
 	end
 	my.log(
-		("Generating completion from %d lines above and %d lines below"):format(
-			math.abs(cursor.row - before.row),
-			math.abs(cursor.row - after.row)
-		)
+		"Generating completion from %d lines above and %d lines below",
+		math.abs(cursor.row - before.row),
+		math.abs(cursor.row - after.row)
 	)
 	return Region.new(before, after)
 end
@@ -1090,7 +1454,45 @@ end
 -- {{{1 M.AI
 
 ---@class M
-local M = {}
+local M = { tok = tok, my = my, Chat = Chat }
+
+---@param args Args
+function M.AIA(args)
+	local cmd = Cmd.new(args)
+	local cursor = cmd.cursor
+	local replace = Region.new(cursor, cursor)
+	local context = cmd:get_context()
+	assert(context.start <= cursor and cursor <= context.stop, "Cursor position has to be inside selected region")
+	local prefix = cmd:buffer_get_text(Region.new(context.start, cursor))
+	local suffix = cmd:buffer_get_text(Region.new(cursor, context.stop))
+	prefix = cmd:prefix_with_prompt(prefix)
+	-- print(vim.inspect(prefix), vim.inspect(suffix))
+	cmd:openai(replace):completions({ prompt = prefix, suffix = suffix })
+end
+
+-------------------------------------------------------------------------------
+
+---@param args Args
+---@param model string?
+function M.AIE(args, model)
+	model = model or "code-davinci-edit-001"
+	--
+	local cmd = Cmd.new(args)
+	local context = cmd:get_context()
+	local selected_text = cmd:buffer_get_text(context)
+	assert(selected_text ~= "", "Selected text is empty")
+	cmd:openai(context):edits({
+		model = model,
+		input = selected_text,
+		instruction = cmd.prompt,
+	})
+end
+
+function M.AIEText(args)
+	M.AIE(args, "text-davinci-edit-001")
+end
+
+-------------------------------------------------------------------------------
 
 ---@param args Args
 ---@param model string?
@@ -1121,109 +1523,111 @@ function M.AI(args, model)
 		end
 		replace = Region.new(context.stop, context.stop)
 	else
-		assert(cmd.prompt, "Nither range nor prompt given.")
+		assert(cmd.prompt, "You have to give either range or prompt given for :AI command.")
 		local cursor = cmd.cursor
 		prompt = cmd.prompt
 		replace = Region.new(cursor, cursor)
 	end
 	assert(prompt)
-	cmd:openai(replace):chat(prompt, { model = model })
+	--
+	local inchatbuffer = vim.bo.filetype == myfiletype
+	local name = config.chat_use
+	if inchatbuffer then
+		name = vim.api.nvim_buf_get_name(cmd.buffer):gsub(".*[[]", ""):gsub("[]]", "")
+	end
+	local chat = Chat.load(name)
+	chat:append_user(prompt)
+	if inchatbuffer then
+		chat:append(ChatRole.assistant, "")
+		chat:show_chat(cmd.buffer)
+		local bufferend = Pos.buffer_end(cmd.buffer)
+		replace = Region.new(bufferend, bufferend)
+	end
+	cmd:openai(replace):chat(chat, { model = model })
 end
 
+---@param args Args
 function M.AI4(args)
 	M.AI(args, "gpt-4")
 end
 
-function M.AIA(args)
-	local cmd = Cmd.new(args)
-	local cursor = cmd.cursor
-	local replace = Region.new(cursor, cursor)
-	local context = cmd:get_context()
-	assert(context.start <= cursor and cursor <= context.stop, "Cursor position has to be inside selected region")
-	local prefix = cmd:buffer_get_text(Region.new(context.start, cursor))
-	local suffix = cmd:buffer_get_text(Region.new(cursor, context.stop))
-	prefix = cmd:prefix_with_prompt(prefix)
-	-- print(vim.inspect(prefix), vim.inspect(suffix))
-	cmd:openai(replace):completions({ prompt = prefix, suffix = suffix })
-end
-
----@param args Args
----@param model string?
-function M.AIE(args, model)
-	model = model or "code-davinci-edit-001"
-	--
-	local cmd = Cmd.new(args)
-	local context = cmd:get_context()
-	local selected_text = cmd:buffer_get_text(context)
-	assert(selected_text ~= "", "Selected text is empty")
-	cmd:openai(context):edits({
-		model = model,
-		input = selected_text,
-		instruction = cmd.prompt,
-	})
-end
-
-function M.AIEText(args)
-	M.AIE(args, "text-davinci-edit-001")
-end
-
-function M.AIChatUse(args)
-	if not args.args or args.args:len() == 0 then
-		print(chat:list())
+---@return string[]
+function M.complete_chat_names(ArgLead, CmdLine, CursorPos)
+	local names = Chat.listnames()
+	local ret = {}
+	if ArgLead == "" then
+		ret = names
 	else
-		local use = args.fargs[1]
-		local msg = table.concat(vim.list_slice(args.fargs, 2), " ")
-		local isnew = chat:use(use, msg)
-		print(
-			("Using %s chat=%s  file=%s  with prompt=%s"):format(
-				isnew and "new" or "loaded",
-				config.chat_use,
-				chat:file(),
-				chat:get_messages()[1].content
-			)
-		)
-	end
-end
-
-function M.AIChatHistory(_)
-	local ms = chat:get_messages()
-	local str = ""
-	for _, v in pairs(ms) do
-		str = str .. " " .. v.content
-	end
-	print(("chat=%s  file=%s  Number of messages=%d\n"):format(config.chat_use, chat:file(), #ms))
-	print(
-		("Approximate number of tokens=%s  Number of tokens=%s\n"):format(
-			chat:tokens_cnt(),
-			Openai.embeddings_prompt_tokens(str)
-		)
-	)
-	print(" \n")
-	for _, v in pairs(ms) do
-		print(
-			("%s(%s): %s%s"):format(
-				v.role,
-				tok.str_to_ntokens_approx(v.content),
-				v.content,
-				v.role == ChatRole.assistant and "\n " or ""
-			)
-		)
-	end
-end
-
----@param args Args
-function M.AIChatZDelete(args)
-	local arg = args.fargs[1]
-	if arg == "file" then
-		chat:delete()
-	else
-		local n = tonumber(arg)
-		if n and n > 0 then
-			chat:remove_cnt(n)
-		else
-			my.error("Invalid argument: " .. vim.inspect(arg) .. ". It has to be a positive number or string 'file'.")
+		for _, v in ipairs(names) do
+			if vim.startswith(v, ArgLead) then
+				table.insert(ret, v)
+			end
 		end
 	end
+	return ret
+end
+
+---@param args Args
+function M.AIChatNew(args)
+	local name = args.fargs[1]
+	local prompt = table.concat(vim.list_slice(args.fargs, 2), " ")
+	Chat.new(name, prompt):save()
+	vim.g.kai_chat_use = name
+end
+
+---@param args Args
+function M.AIChatUse(args)
+	assert(#args.fargs == 1, sprintf("Wrong number of arguments: %d", #args.fargs))
+	local name = args.fargs[1]
+	Chat.assert_exists(name)
+	vim.g.kai_chat_use = name
+end
+
+---@param args Args
+function M.AIChatOpen(args)
+	assert(#args.fargs <= 1, sprintf("Wrong number of arguments: %d", #args.fargs))
+	local name = args.fargs[1] or config.chat_use
+	local chat = Chat.load(name)
+	vim.cmd("enew")
+	vim.opt_local.buftype = "nofile"
+	vim.opt_local.bufhidden = "wipe"
+	vim.opt_local.swapfile = false
+	vim.opt_local.filetype = myfiletype
+	vim.opt_local.readonly = true
+	vim.api.nvim_buf_set_name(0, "[" .. name .. "]")
+	chat:show_chat(0)
+end
+
+---@param args Args
+function M.AIChatView(args)
+	assert(#args.fargs <= 1, sprintf("Wrong number of arguments: %d", #args.fargs))
+	local name = args.fargs[1] or config.chat_use
+	local txt = Chat.load(name):to_text()
+	my.log("%s", txt)
+end
+
+---@param args Args
+function M.AIChatList(args)
+	assert(#args.fargs == 0, sprintf("Wrong number of arguments: %d", #args.fargs))
+	local names = Chat.listnames()
+	local txt = sprintf("There are %d chats.\n", #names)
+	---@type string[][]
+	local data = {}
+	table.insert(data, { "name", "file", "#tok", "init" })
+	for _, name in ipairs(names) do
+		local chat = Chat.load(name)
+		table.insert(data, { chat.name, chat:file(), chat:ntokens(), sprintf("%q", chat:get_system_message()) })
+	end
+	txt = txt .. my.tabularize(data, { "", "-", "", "-" })
+	my.log("%s", txt)
+end
+
+---@param args Args
+function M.AIChatRemove(args)
+	assert(#args.fargs <= 1, sprintf("Wrong number of arguments: %d", #args.fargs))
+	local name = args.fargs[1] or config.chat_use
+	Chat.assert_exists(name)
+	Chat.new(name):delete()
 end
 
 return M

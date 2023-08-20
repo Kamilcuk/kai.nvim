@@ -81,7 +81,7 @@ on how to write good AI prompts.
 - `:AI prompt`
     - Chat with AI using [chats/completions OpenAI API](https://platform.openai.com/docs/api-reference/chat/create).
     - The response will be printed at cursor position.
-    - The chat conversations history is saved into `global.cache_dir/k_ai/chat*.json` files.
+    - The chat conversations history is saved into `global.cache_dir/kai/chat*.json` files.
     - Chat history is send to chats/completion API reduced to the `chat_max_tokens` number of tokens.
         - To keep below maximum number of tokens allowed and also to reduce number of tokens you pay for.
         - The calculation of tokens is approximate, because really counting tokens would be too hard.

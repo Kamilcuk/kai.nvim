@@ -6,16 +6,16 @@ Execute (prepare):
     let tmp = trim(tmp)
     return tmp
   endfunction
-  let g:ai_vader = v:true
+  let g:kai_vader = v:true
 
 Execute (normal):
-  let g:ai_mock = "1 2"
+  let g:kai_mock = "1 2"
   AI write 1 2
   AssertEqual Myget(), '1 2'
 
 
 Execute (chat):
-  let g:ai_mock = "1 2"
+  let g:kai_mock = "1 2"
   AI! write 1 2
   AssertEqual Myget(), '1 2'
 
@@ -25,7 +25,7 @@ Given (percent):
   2
   3
 Execute (percent):
-  let g:ai_mock = "2"
+  let g:kai_mock = "2"
   %AI replace by 2
   AssertEqual Myget(), '2'
 
@@ -34,7 +34,7 @@ Given (range):
   1
   2
 Execute (range):
-  let g:ai_mock = "2"
+  let g:kai_mock = "2"
   1,1AI replace 1 by 2
   AssertEqual Myget(), '2 2'
 
@@ -46,7 +46,7 @@ Given (auto):
   4
 Execute (auto):
   normal! G
-  let g:ai_mock = "5"
+  let g:kai_mock = "5"
   AI
   AssertEqual Myget(), '1 2 3 45'
 
@@ -54,8 +54,8 @@ Execute (auto):
 Given (fail):
   empty
 Execute (fail):
-  let g:debug = v:true
-  let g:ai_mock = v:false
+  let g:kai_debug = v:true
+  let g:kai_mock = v:false
   let $OPENAI_API_KEY = "invalid"
   AI write '1 2'
   AssertEqual Myget(), 'empty'
