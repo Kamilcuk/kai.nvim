@@ -911,7 +911,7 @@ function Chat:show_chat(buffer)
 	local signs = vim.fn.sign_getplaced(bufname, { group = signgroup })[1].signs
 	local signlist = {}
 	for _, v in ipairs(signs) do
-		table.insert(signlist, { buffer = buffer, group = indicatorSign, id = v })
+		table.insert(signlist, { buffer = bufname, group = v.group, id = v.id })
 	end
 	vim.fn.sign_unplacelist(signlist)
 	--
@@ -931,10 +931,9 @@ function Chat:show_chat(buffer)
 			table.insert(lines, line)
 		end
 	end
-    table.insert(lines, "")
 	--
 	vim.api.nvim_buf_set_lines(buffer, 0, -1, true, lines)
-	vim.api.nvim_win_set_cursor(buffer, { #lines, 0 })
+	vim.api.nvim_win_set_cursor(0, { #lines, my.get_row_length(buffer, #lines - 1) })
 	vim.fn.sign_placelist(toplace)
 	vim.cmd.redraw()
 end
