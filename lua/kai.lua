@@ -250,6 +250,10 @@ function Pos.buffer_end(buffer)
 	return Pos.new10(row, my.get_row_length(buffer, row - 1))
 end
 
+function Pos:set_cursor(window)
+	vim.api.nvim_win_set_cursor(window, self:get10())
+end
+
 -- }}}
 -- {{{1 Region
 
@@ -301,6 +305,7 @@ Subprocess.__index = Subprocess
 ---@field on_exit nil | fun(code: integer, signal: integer, stderr: string): nil
 
 ---@param o SubprocessParam
+---@return integer? nil if not run, otherwise the exit status of the process
 function Subprocess.spawn(o)
 	assert(o.cmd)
 	local self = setmetatable({
@@ -326,7 +331,7 @@ function Subprocess.call_output(cmd)
 end
 
 ---@private
----@return boolean if the run was successfull and command exited with zero exit status
+---@return integer?
 function Subprocess:_do_run()
 	local stdout = vim.loop.new_pipe()
 	local stdout_line = ""
@@ -351,7 +356,7 @@ function Subprocess:_do_run()
 	if not self.handle then
 		local error = pid_or_error
 		my.error("%s could not be started: %s", vim.inspect(self.cmd), error)
-		return false
+		return nil
 	end
 	self.on_start()
 	--
@@ -391,7 +396,7 @@ function Subprocess:_do_run()
 			self:_kill()
 		end
 	end
-	return self.returncode == 0
+	return self.returncode
 end
 
 ---@private
@@ -687,6 +692,7 @@ end
 ---@param max integer
 ---@return ChatMsg[]
 function tok.trim_messages_to_num_tokens(messages, max)
+	assert(#messages > 1)
 	-- based on the above num_tokens_from_messages
 	-- assuming not gpt-3.5-turbo-0301
 	-- every message follows <|start|>{role/name}\n{content}<|end|>\n
@@ -694,13 +700,21 @@ function tok.trim_messages_to_num_tokens(messages, max)
 	-- every reply is primed with <|start|>assistant<|message|>
 	local num_tokens = 3
 	local ret = {}
-	for i = #messages, 1, -1 do
+	-- Always include the system message
+	local loopstartidx = 1
+	if messages[1].role == "system" then
+		m = messages[1]
+		loopstartidx = 2
+		table.insert(ret, m)
+		num_tokens = num_tokens + tokens_per_message + tok.ntokens(m.role) + tok.ntokens(m.content)
+	end
+	for i = #messages, loopstartidx, -1 do
 		local m = messages[i]
 		num_tokens = num_tokens + tokens_per_message + tok.ntokens(m.role) + tok.ntokens(m.content)
 		if num_tokens >= max then
 			break
 		end
-		table.insert(ret, 1, m)
+		table.insert(ret, loopstartidx, m)
 	end
 	return ret
 end
@@ -828,6 +842,7 @@ function Chat.new(name, initmsg)
 	}, Chat)
 end
 
+-- Append a new message to chat.
 ---@param role ChatRole
 ---@param content string
 function Chat:append(role, content)
@@ -841,6 +856,7 @@ function Chat:append(role, content)
 	end
 end
 
+-- Append a message from the user to chat.
 ---@param content string
 function Chat:append_user(content)
 	self:append(ChatRole.user, content)
@@ -863,6 +879,7 @@ function Chat:get_trimmed_messages()
 	return ms
 end
 
+-- Get the system message chat was started with.
 ---@return string?
 function Chat:get_system_message()
 	for _, v in ipairs(self.ms) do
@@ -872,70 +889,46 @@ function Chat:get_system_message()
 	end
 end
 
+-- Return the global number of tokens in all messages.
 ---@return integer
 function Chat:ntokens()
 	return tok.num_tokens_from_messages(self.ms)
 end
 
+-- Convert chat to text for the use of chat window.
 ---@return string
 function Chat:to_text()
+	local names = {
+		[ChatRole.system] = "SY",
+		[ChatRole.assistant] = "AI",
+		[ChatRole.user] = "ME",
+	}
 	local data = "Chat name=" .. self.name .. " file=" .. self:file() .. "\n"
-	local n = tostring(ChatRole.maxlen)
-	for i, msg in ipairs(self.ms) do
+	for _, msg in ipairs(self.ms) do
 		local ntokens = tok.ntokens(msg.content) + 3
-		local new
-		if false then
-			new = sprintf("+++ %d %" .. n .. "s (%d tokens)\n%s\n", i, msg.role, ntokens, msg.content)
-		else
-			local pre = sprintf("%" .. n .. "s ", msg.role)
-			local content = table.concat(my.splitlines(msg.content), sprintf("\n%" .. #pre .. "s", ""))
-			new = pre .. content .. "\n"
-		end
+		local new = sprintf("%2s: %s\n", names[msg.role], msg.content)
 		data = data .. new
 	end
 	return data
 end
 
 ---@param buffer Buffer | integer
-function Chat:show_chat(buffer)
+---@param ending string?
+function Chat:show_chat(buffer, ending)
 	buffer = buffer or 0
-	local bufname = vim.fn.bufname(buffer)
-	local chat_system_sign = "kai_system"
-	local chat_user_sign = "kai_user"
-	local chat_assistant_sign = "kai_assistant"
-	local signgroup = "kai_chat"
-	vim.fn.sign_define(chat_system_sign, { text = "🖥" })
-	vim.fn.sign_define(chat_user_sign, { text = "👤" })
-	vim.fn.sign_define(chat_assistant_sign, { text = "🤖" })
-	-- Remove all signs in current buffer
-	local signs = vim.fn.sign_getplaced(bufname, { group = signgroup })[1].signs
-	local signlist = {}
-	for _, v in ipairs(signs) do
-		table.insert(signlist, { buffer = bufname, group = v.group, id = v.id })
-	end
-	vim.fn.sign_unplacelist(signlist)
-	--
-	local txt = "Chat name=" .. self.name .. " file=" .. self:file() .. "\n"
-	local toplace = {}
-	local lines = {}
-	for _, m in ipairs(self.ms) do
-		local who = m.role
-		local signname = "kai_" .. m.role
-		for row, line in ipairs(my.splitlines(m.content)) do
-			table.insert(toplace, {
-				buffer = bufname,
-				group = signgroup,
-				lnum = #lines + 1,
-				name = signname,
-			})
-			table.insert(lines, line)
-		end
-	end
-	--
+	local text = self:to_text():sub(1, -2) .. (ending or "\n")
+	local lines = my.splitlines(text)
 	vim.api.nvim_buf_set_lines(buffer, 0, -1, true, lines)
+	vim.api.nvim_win_set_buf(0, buffer)
 	vim.api.nvim_win_set_cursor(0, { #lines, my.get_row_length(buffer, #lines - 1) })
-	vim.fn.sign_placelist(toplace)
-	vim.cmd.redraw()
+end
+
+-- Shows the string ME: on the end of buffer. Synchronize with to_text.
+---@param buffer Buffer | integer
+function Chat:show_me(buffer)
+	local bufferend = Pos.buffer_end(buffer)
+	vim.api.nvim_buf_set_text(buffer, bufferend.row, bufferend.col, bufferend.row, bufferend.col, { "ME: " })
+	Pos.buffer_end(buffer):set_cursor(0)
 end
 
 -- }}}
@@ -944,17 +937,21 @@ end
 ---@type integer
 local chatFileVersion = 1
 
+-- The file where chat is saved, static version.
 ---@private
 ---@return string
-function Chat.filename(name)
+function Chat._file(name)
 	return vim.fn.simplify(sprintf("%s/chat-%s.json", config.cache_dir, name))
 end
 
+-- The file where the chat is saved.
 ---@return string
 function Chat:file()
-	return Chat.filename(self.name)
+	return Chat._file(self.name)
 end
 
+-- Internal function for loading the chat from file
+-- Returns tuple of optional error message and optional chat messages.
 ---@private
 ---@param filename string
 ---@return string?, ChatMsg[]?
@@ -994,8 +991,9 @@ end
 -- Constructor
 ---@param name string
 function Chat.load(name)
+	Chat.assert_exists(name)
 	local ret = Chat.new(name)
-	local filename = Chat.filename(name)
+	local filename = Chat._file(name)
 	local err, ms = Chat._load(filename)
 	if ms == nil and err == nil then
 		my.log("Started new chat at %s", filename)
@@ -1008,6 +1006,7 @@ function Chat.load(name)
 	return ret
 end
 
+-- Asserts that a chat with name exists.
 function Chat.assert_exists(name)
 	assert(
 		vim.tbl_contains(Chat.listnames(), name),
@@ -1044,10 +1043,11 @@ function Chat:save()
 	file:close()
 	-- Atomically rename.
 	os.rename(tmpfile, self:file())
-	my.debug("saved chat mesages to " .. self:file())
+	my.debug("saved chat mesages to %s", self:file())
 	return true
 end
 
+-- Delete chat file.
 function Chat:delete()
 	if not vim.fn.filereadable(self:file()) then
 		my.log("file does not exists: %s", self:file())
@@ -1064,25 +1064,15 @@ function Chat:delete()
 	end
 end
 
----@return {name: string, file: string}[]
-function Chat.list()
-	local files = vim.fn.globpath(config.cache_dir, "chat*.json", false, true, false)
+-- List all chat names.
+---@return string[]
+function Chat.listnames()
+	local files = vim.fn.globpath(config.cache_dir, "chat-*.json", false, true, true)
 	local ret = {}
 	for _, file in pairs(files) do
 		local filename = vim.fn.fnamemodify(file, ":t")
-		local name = filename:gsub("^chat", ""):gsub("[-]", ""):gsub(".json$", "")
-		table.insert(ret, { name = name, file = file })
-	end
-	return ret
-end
-
----@return string[]
-function Chat.listnames()
-	local ret = {}
-	for _, v in pairs(Chat.list()) do
-		if v.name and v.name ~= "" then
-			table.insert(ret, v.name)
-		end
+		local name = filename:gsub("^chat[-]", ""):gsub(".json$", "")
+		table.insert(ret, name)
 	end
 	return ret
 end
@@ -1101,7 +1091,7 @@ Openai.__index = Openai
 ---@param cb Indicator
 ---@return Openai
 function Openai.new(cb)
-	return setmetatable({ cb = cb, acc = "", is_chat = false, tokens = 0 }, Openai)
+	return setmetatable({ cb = cb, acc = "", tokens = 0 }, Openai)
 end
 
 ---@param cmd string[] The command to run.
@@ -1169,7 +1159,7 @@ end
 ---@param line string
 ---@param handle Subprocess
 function Openai:on_line(line, handle)
-	my.debug("<", vim.inspect(line))
+	my.debug("< %s", vim.inspect(line))
 	-- print(vim.inspect(line))
 	if self.acc ~= "" or vim.startswith(vim.trim(line), "{") then
 		-- This is an error response or not streaming response.
@@ -1242,7 +1232,7 @@ end
 function Openai._get_curl(endpoint, body)
 	local api_key = os.getenv("OPENAI_API_KEY")
 	assert(api_key, "$OPENAI_API_KEY environment variable must be set")
-	my.debug(">", vim.inspect(endpoint), vim.inspect(body))
+	my.debug("> %s %s", vim.inspect(endpoint), vim.inspect(body))
 	local jsonbody = vim.json.encode(body)
 	local curl = {
 		"curl",
@@ -1538,11 +1528,16 @@ function M.AI(args, model)
 	chat:append_user(prompt)
 	if inchatbuffer then
 		chat:append(ChatRole.assistant, "")
-		chat:show_chat(cmd.buffer)
+		chat:show_chat(cmd.buffer, "")
 		local bufferend = Pos.buffer_end(cmd.buffer)
 		replace = Region.new(bufferend, bufferend)
 	end
+	--
 	cmd:openai(replace):chat(chat, { model = model })
+	--
+	if inchatbuffer then
+		chat:show_me(cmd.buffer)
+	end
 end
 
 ---@param args Args
@@ -1570,15 +1565,20 @@ end
 function M.AIChatNew(args)
 	local name = args.fargs[1]
 	local prompt = table.concat(vim.list_slice(args.fargs, 2), " ")
+	assert(
+		not vim.tbl_contains(Chat.listnames(), name),
+		sprintf("There is already a chat with name %s at %s. Remove it with AIChatRemove", name, config.cache_dir)
+	)
 	Chat.new(name, prompt):save()
 	vim.g.kai_chat_use = name
+	my.log("Created chat %s and switched to it", name)
 end
 
 ---@param args Args
 function M.AIChatUse(args)
 	assert(#args.fargs == 1, sprintf("Wrong number of arguments: %d", #args.fargs))
 	local name = args.fargs[1]
-	Chat.assert_exists(name)
+	Chat.load(name)
 	vim.g.kai_chat_use = name
 end
 
@@ -1587,14 +1587,27 @@ function M.AIChatOpen(args)
 	assert(#args.fargs <= 1, sprintf("Wrong number of arguments: %d", #args.fargs))
 	local name = args.fargs[1] or config.chat_use
 	local chat = Chat.load(name)
-	vim.cmd("enew")
-	vim.opt_local.buftype = "nofile"
-	vim.opt_local.bufhidden = "wipe"
-	vim.opt_local.swapfile = false
-	vim.opt_local.filetype = myfiletype
-	vim.opt_local.readonly = true
-	vim.api.nvim_buf_set_name(0, "[" .. name .. "]")
-	chat:show_chat(0)
+	local bufname = "[" .. name .. "]"
+	local buffer = nil
+	-- Find buffer if already exists
+	for _, v in ipairs(vim.fn.getbufinfo({ buflisted = 1 })) do
+		if vim.endswith(v.name, bufname) then
+			buffer = v.bufnr
+			break
+		end
+	end
+	if buffer == nil then
+		-- Create a scratch buffer if not found
+		buffer = vim.api.nvim_create_buf(true, true)
+		vim.api.nvim_buf_set_option(buffer, "buftype", "nofile")
+		vim.api.nvim_buf_set_option(buffer, "bufhidden", "hide")
+		vim.api.nvim_buf_set_option(buffer, "swapfile", false)
+		vim.api.nvim_buf_set_option(buffer, "filetype", myfiletype)
+		vim.api.nvim_buf_set_option(buffer, "readonly", true)
+		vim.api.nvim_buf_set_name(buffer, bufname)
+	end
+	chat:show_chat(buffer, "\n")
+	chat:show_me(buffer)
 end
 
 ---@param args Args
