@@ -43,8 +43,6 @@ local config = setmetatable({}, {
 	end,
 })
 
-local myfiletype = "kai_chat"
-
 -- }}}
 -- {{{1 my
 
@@ -52,6 +50,9 @@ local myfiletype = "kai_chat"
 local my = {}
 
 my.prefix = "kai.nvim: "
+
+my.modifiable = "modifiable"
+my.filetype = "kai_chat"
 
 ---@alias Buffer integer
 
@@ -167,17 +168,7 @@ end
 ---@param str string
 ---@return string[]
 function my.splitlines(str)
-	local delimiter = "\n"
-	local result = {}
-	local from = 1
-	local delim_from, delim_to = string.find(str, delimiter, from)
-	while delim_from do
-		table.insert(result, string.sub(str, from, delim_from - 1))
-		from = delim_to + 1
-		delim_from, delim_to = string.find(str, delimiter, from)
-	end
-	table.insert(result, string.sub(str, from))
-	return result
+	return vim.split(str, "\n", { plain = true })
 end
 
 -- }}}
@@ -243,7 +234,7 @@ function Pos:__le(o)
 	return (self.row < o.row) or (self.row == o.row and self.col <= o.col)
 end
 
----@param buffer Buffer | integer
+---@param buffer Buffer
 ---@return Pos
 function Pos.buffer_end(buffer)
 	local row = vim.api.nvim_buf_line_count(buffer)
@@ -283,6 +274,103 @@ end
 ---@param buffer Buffer
 function Region.buffer(buffer)
 	return Region.new(Pos.new0(0, 0), Pos.buffer_end(buffer))
+end
+
+-- }}}
+-- {{{1 BufferN
+
+---@class BufferN
+---@field v integer
+BufferN = {}
+BufferN.__index = BufferN
+setmetatable(BufferN, {
+	__call = function(cls, ...)
+		return cls.new(...)
+	end,
+})
+
+function BufferN.new(v)
+	assert(type(v) == "number", "v has type " .. type(v))
+	return setmetatable({ v = v }, BufferN)
+end
+
+function BufferN:line_count()
+	return vim.api.nvim_buf_line_count(self.v)
+end
+
+---@param row integer
+---@returns integer
+function BufferN:get_row_length(row)
+	return vim.api.nvim_buf_get_lines(self.v, row, row + 1, true)[1]:len()
+end
+
+---@generic T
+---@param option string
+---@param set T?
+---@return T?
+function BufferN:option(option, set)
+	if set ~= nil then
+		vim.api.nvim_buf_set_option(self.v, option, set)
+	else
+		return vim.api.nvim_buf_get_option(self.v, option)
+	end
+end
+
+---@param set boolean?
+---@return boolean?
+function BufferN:modifiable(set)
+	return self:option("modifiable", set)
+end
+
+---@return Pos
+function BufferN:endpos()
+	local row = vim.api.nvim_buf_line_count(self.v)
+	return Pos.new10(row, self:get_row_length(row - 1))
+end
+
+---@return Region
+function BufferN:region()
+	return Region.new(Pos.new0(0, 0), self:endpos())
+end
+
+---@param reg Region
+---@param lines string[]
+function BufferN:set_text(reg, lines)
+	vim.api.nvim_buf_set_text(self.v, reg.start.row, reg.start.col, reg.stop.row, reg.stop.col, lines)
+end
+
+---@param name string
+---@return Pos
+function BufferN:get_mark(name)
+	return Pos.new10arr(vim.api.nvim_buf_get_mark(self.v, name))
+end
+
+-- Get the text from the buffer between the start and end points.
+---@param reg Region
+---@return string
+function BufferN:get_text(reg)
+	return table.concat(
+		vim.api.nvim_buf_get_text(self.v, reg.start.row, reg.start.col, reg.stop.row, reg.stop.col, {}),
+		"\n"
+	)
+end
+
+---@return boolean
+function BufferN:ischatbuffer()
+	local filetype = vim.api.nvim_buf_get_option(self.v, "filetype")
+	return filetype == my.filetype
+end
+
+function BufferN:chatbuffermodify()
+	if self:ischatbuffer() then
+		vim.api.nvim_buf_set_option(self.v, "modifiable", true)
+	end
+end
+
+function BufferN:chatbufferunmodify()
+	if self:ischatbuffer() then
+		vim.api.nvim_buf_set_option(self.v, "modifiable", false)
+	end
 end
 
 -- }}}
@@ -438,112 +526,6 @@ function Subprocess:__gc()
 end
 
 -- }}}
--- {{{1 Indicator
-
-local indicatorSign = "kai_indicator_sign"
-
----@class Indicator
----@field buffer Buffer
----@field reg Region Region to replace with text.
----@field signlist {}
----@field first boolean
-local Indicator = {}
-Indicator.__index = Indicator
-
----@param buffer Buffer
----@param reg Region
-function Indicator.new(buffer, reg)
-	return setmetatable({
-		buffer = buffer,
-		reg = reg,
-		first = true,
-		signlist = {},
-	}, Indicator)
-end
-
----@private
-function Indicator:__tostring()
-	return sprintf("Indicator{%s,%s}", self.buffer, self.reg)
-end
-
-function Indicator:on_start()
-	vim.fn.sign_define(indicatorSign, { text = config.indicator_text })
-	-- For the whole selection, place the signs.
-	self:_place_signs(self.reg.start.row, self.reg.stop.row)
-	vim.cmd.redraw()
-end
-
----@param data string
-function Indicator:on_data(data)
-	-- On the first time they are not equal.
-	if self.first then
-		self.first = false
-		-- Remove the signs placed on the whole selection above.
-		self:_unplace_signs()
-	end
-	--
-	local lines = vim.split(data, "\n")
-	vim.api.nvim_buf_set_text(
-		self.buffer,
-		self.reg.start.row,
-		self.reg.start.col,
-		self.reg.stop.row,
-		self.reg.stop.col,
-		lines
-	)
-	-- Calculate new region stop with the filled text.
-	local stop_row = self.reg.start.row + #lines - 1
-	local stop_col = #lines == 1 and (self.reg.stop.col + lines[1]:len()) or my.get_row_length(self.buffer, stop_row)
-	self.reg.stop = Pos.new0(stop_row, stop_col)
-	self.reg:assert()
-	-- Place new signs between start.row and stop.row if there were any newlines.
-	self:_place_signs(self.reg.start.row, self.reg.stop.row)
-	-- On the next loop, we will just append new characters. On the first one, we replace the region.
-	self.reg.start = self.reg.stop
-	-- Move cursor position to the end of the region to make it visible.
-	vim.api.nvim_win_set_cursor(0, self.reg.stop:get10())
-	vim.cmd.redraw()
-end
-
----@private
-function Indicator:_place_signs(start, stop)
-	local toplace = {}
-	for row = start, stop do
-		table.insert(toplace, {
-			buffer = self.buffer,
-			group = indicatorSign,
-			lnum = row + 1,
-			name = indicatorSign,
-		})
-	end
-	local ret = vim.fn.sign_placelist(toplace)
-	if ret ~= -1 then
-		for _, v in pairs(ret) do
-			table.insert(self.signlist, { buffer = self.buffer, group = indicatorSign, id = v })
-		end
-	end
-end
-
----@private
----@return boolean true if any signs were unplaced
-function Indicator:_unplace_signs()
-	local ret = self.signlist ~= {}
-	vim.fn.sign_unplacelist(self.signlist)
-	self.signlist = {}
-	return ret
-end
-
-function Indicator:on_complete()
-	if self:_unplace_signs() then
-		vim.cmd.redraw()
-	end
-end
-
----@private
-function Indicator:__gc()
-	self:on_complete()
-end
-
 -- {{{1 Tokenizer
 
 ---@class Tokenizer
@@ -912,7 +894,7 @@ function Chat:to_text()
 	return data
 end
 
----@param buffer Buffer | integer
+---@param buffer integer
 ---@param ending string?
 function Chat:show_chat(buffer, ending)
 	buffer = buffer or 0
@@ -924,8 +906,8 @@ function Chat:show_chat(buffer, ending)
 end
 
 -- Shows the string ME: on the end of buffer. Synchronize with to_text.
----@param buffer Buffer | integer
-function Chat:show_me(buffer)
+---@param buffer integer
+function Chat.show_m_e(buffer)
 	local bufferend = Pos.buffer_end(buffer)
 	vim.api.nvim_buf_set_text(buffer, bufferend.row, bufferend.col, bufferend.row, bufferend.col, { "ME: " })
 	Pos.buffer_end(buffer):set_cursor(0)
@@ -1075,6 +1057,117 @@ function Chat.listnames()
 		table.insert(ret, name)
 	end
 	return ret
+end
+
+-- }}}
+-- {{{1 Indicator
+
+local indicatorSign = "kai_indicator_sign"
+
+---@class Indicator
+---@field buffer Buffer
+---@field reg Region Region to replace with text.
+---@field signlist {}
+---@field first boolean
+local Indicator = {}
+Indicator.__index = Indicator
+
+---@param buffer Buffer
+---@param reg Region
+function Indicator.new(buffer, reg)
+	return setmetatable({
+		buffer = buffer,
+		reg = reg,
+		first = true,
+		signlist = {},
+	}, Indicator)
+end
+
+---@private
+function Indicator:__tostring()
+	return sprintf("Indicator{%s,%s}", self.buffer, self.reg)
+end
+
+function Indicator:on_start()
+	vim.fn.sign_define(indicatorSign, { text = config.indicator_text })
+	-- For the whole selection, place the signs.
+	self:_place_signs(self.reg.start.row, self.reg.stop.row)
+	vim.cmd.redraw()
+end
+
+---@param data string
+function Indicator:on_data(data)
+	-- On the first time they are not equal.
+	if self.first then
+		self.first = false
+		-- Remove the signs placed on the whole selection above.
+		self:_unplace_signs()
+	end
+	--
+	local lines = vim.split(data, "\n")
+	vim.api.nvim_buf_set_text(
+		self.buffer,
+		self.reg.start.row,
+		self.reg.start.col,
+		self.reg.stop.row,
+		self.reg.stop.col,
+		lines
+	)
+	-- Calculate new region stop with the filled text.
+	local stop_row = self.reg.start.row + #lines - 1
+	local stop_col = #lines == 1 and (self.reg.stop.col + lines[1]:len()) or my.get_row_length(self.buffer, stop_row)
+	self.reg.stop = Pos.new0(stop_row, stop_col)
+	self.reg:assert()
+	-- Place new signs between start.row and stop.row if there were any newlines.
+	self:_place_signs(self.reg.start.row, self.reg.stop.row)
+	-- On the next loop, we will just append new characters. On the first one, we replace the region.
+	self.reg.start = self.reg.stop
+	-- Move cursor position to the end of the region to make it visible.
+	vim.api.nvim_win_set_cursor(0, self.reg.stop:get10())
+	vim.cmd.redraw()
+end
+
+---@private
+function Indicator:_place_signs(start, stop)
+	local toplace = {}
+	for row = start, stop do
+		table.insert(toplace, {
+			buffer = self.buffer,
+			group = indicatorSign,
+			lnum = row + 1,
+			name = indicatorSign,
+		})
+	end
+	local ret = vim.fn.sign_placelist(toplace)
+	if ret ~= -1 then
+		for _, v in pairs(ret) do
+			table.insert(self.signlist, { buffer = self.buffer, group = indicatorSign, id = v })
+		end
+	end
+end
+
+---@private
+---@return boolean true if any signs were unplaced
+function Indicator:_unplace_signs()
+	local ret = self.signlist ~= {}
+	vim.fn.sign_unplacelist(self.signlist)
+	self.signlist = {}
+	return ret
+end
+
+function Indicator:on_complete()
+	if BufferN(self.buffer):ischatbuffer() then
+		Chat.show_m_e(self.buffer)
+	end
+	BufferN(self.buffer):chatbufferunmodify()
+	if self:_unplace_signs() then
+		vim.cmd.redraw()
+	end
+end
+
+---@private
+function Indicator:__gc()
+	self:on_complete()
 end
 
 -- }}}
@@ -1326,6 +1419,7 @@ end
 ---@field buffer Buffer
 ---@field cursor Pos
 ---@field prompt string?
+---@field buffern BufferN
 Cmd = {}
 Cmd.__index = Cmd
 
@@ -1337,25 +1431,24 @@ function Cmd.new(args)
 		prompt = (args.args and args.args ~= "") and args.args or nil,
 		buffer = vim.api.nvim_get_current_buf(),
 	}, Cmd)
-	local buffer_is_modifiable = vim.api.nvim_buf_get_option(self.buffer, "modifiable")
-	assert(buffer_is_modifiable, "Buffer is not modifiable")
+	self.buffern = BufferN(self.buffer)
+	if not self.buffern:ischatbuffer() then
+		assert(self.buffern:modifiable(), "Buffer is not modifiable")
+	end
 	self.cursor = self:_get_cursor()
 	return self
 end
 
 ---@param row integer
 function Cmd:get_row_length(row)
-	return my.get_row_length(self.buffer, row)
+	return self.buffern:get_row_length(row)
 end
 
 -- Get the text from the buffer between the start and end points.
 ---@param reg Region
 ---@return string
 function Cmd:buffer_get_text(reg)
-	return table.concat(
-		vim.api.nvim_buf_get_text(self.buffer, reg.start.row, reg.start.col, reg.stop.row, reg.stop.col, {}),
-		"\n"
-	)
+	return self.buffern:get_text(reg)
 end
 
 ---@private
@@ -1439,11 +1532,20 @@ function Cmd:prefix_with_prompt(str)
 	return str
 end
 
+function Cmd:inchatbuffer()
+	return self.buffern:ischatbuffer()
+end
+
 -- }}}
 -- {{{1 M.AI
 
 ---@class M
 local M = { tok = tok, my = my, Chat = Chat }
+
+---@param opts table
+function M.setup(opts)
+	vim.tbl_extend(config, opts)
+end
 
 ---@param args Args
 function M.AIA(args)
@@ -1489,9 +1591,11 @@ function M.AI(args, model)
 	model = model or "gpt-3.5-turbo"
 	--
 	local cmd = Cmd.new(args)
+	cmd.buffern:chatbuffermodify()
 	---@type string, Region
 	local prompt, replace
 	if args.range > 0 then
+		assert(not cmd:inchatbuffer(), "Range not supported in chat window")
 		local context = cmd:get_context()
 		prompt = cmd:buffer_get_text(context)
 		prompt = cmd:prefix_with_prompt(prompt)
@@ -1512,21 +1616,24 @@ function M.AI(args, model)
 		end
 		replace = Region.new(context.stop, context.stop)
 	else
-		assert(cmd.prompt, "You have to give either range or prompt given for :AI command.")
+		assert(
+			cmd.prompt,
+			cmd:inchatbuffer() and "You have to give prompt for :AI command."
+				or "You have to give either range or prompt given for :AI command."
+		)
 		local cursor = cmd.cursor
 		prompt = cmd.prompt
 		replace = Region.new(cursor, cursor)
 	end
 	assert(prompt)
 	--
-	local inchatbuffer = vim.bo.filetype == myfiletype
 	local name = config.chat_use
-	if inchatbuffer then
+	if cmd:inchatbuffer() then
 		name = vim.api.nvim_buf_get_name(cmd.buffer):gsub(".*[[]", ""):gsub("[]]", "")
 	end
 	local chat = Chat.load(name)
 	chat:append_user(prompt)
-	if inchatbuffer then
+	if cmd:inchatbuffer() then
 		chat:append(ChatRole.assistant, "")
 		chat:show_chat(cmd.buffer, "")
 		local bufferend = Pos.buffer_end(cmd.buffer)
@@ -1534,10 +1641,6 @@ function M.AI(args, model)
 	end
 	--
 	cmd:openai(replace):chat(chat, { model = model })
-	--
-	if inchatbuffer then
-		chat:show_me(cmd.buffer)
-	end
 end
 
 ---@param args Args
@@ -1602,12 +1705,15 @@ function M.AIChatOpen(args)
 		vim.api.nvim_buf_set_option(buffer, "buftype", "nofile")
 		vim.api.nvim_buf_set_option(buffer, "bufhidden", "hide")
 		vim.api.nvim_buf_set_option(buffer, "swapfile", false)
-		vim.api.nvim_buf_set_option(buffer, "filetype", myfiletype)
+		vim.api.nvim_buf_set_option(buffer, "filetype", my.filetype)
 		vim.api.nvim_buf_set_option(buffer, "readonly", true)
+		vim.api.nvim_buf_set_option(buffer, "modifiable", false)
 		vim.api.nvim_buf_set_name(buffer, bufname)
 	end
+	vim.api.nvim_buf_set_option(buffer, "modifiable", true)
 	chat:show_chat(buffer, "\n")
-	chat:show_me(buffer)
+	chat.show_m_e(buffer)
+	vim.api.nvim_buf_set_option(buffer, "modifiable", false)
 end
 
 ---@param args Args
