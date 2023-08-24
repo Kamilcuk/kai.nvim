@@ -1,0 +1,33 @@
+---
+on:
+  - push
+jobs:
+  test_syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: davidcraig/action-wow-lint@v1.0.1
+        with:
+          path-to-files: ./lua/kai.lua
+  test_tokens:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+      - uses: PsychoLlama/vader-action@v1
+        with:
+          test-pattern: ./test/tokens.vader
+          neovim: true
+  deploy:
+    needs:
+      - test_syntax
+      - test_tokens
+    if: github.event_name == 'push' && contains(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: nvim-neorocks/luarocks-tag-release@v4
+        env:
+          LUAROCKS_API_KEY: ${{ secrets.LUAROCKS_API_KEY }}
