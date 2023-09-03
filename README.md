@@ -90,17 +90,18 @@ on how to write good AI prompts.
     - I can use this freely, because it does not send company proprietary code to OpenAI.
 - `:AI4`
     - Like `:AI` but uses GPT4 instead of cheaper GPT3.
-- `:AIChatUse`
-    - Lists existing chats with names and files where they are saved.
-- `:AIChatUse name`
-    - Selects a chat to use by name.
-- `:AIChatUse name prompt...`
+- `:AIChatList`
+    - Lists the chats
+- `:AIChatNew name prompt...`
     - Starts a new chat with specific name and prompt.
-- `:AIChatHistory`
-    - Shows chat history
-- `:AIChatZDelete num|file`
-    - You can delete one most earliest prompt from history with `:AIChatZDelete 1`, in case you get "too many tokens" error.
-    - You can delete history file with `:AIChatZDelete file`.
+- `:AIChatUse name`
+    - Selects a chat history file to use by name. The "default" chat is the default.
+- `:AIChatOpen`
+    - Opens the current chat, or given an argument open the chat with the name
+- `:AIChatRemove name`
+    - Remove the chat with the name.
+- `:AIChatList`
+    - Lists chat history as messages. (AIChatOpen does the same, I might want to remove this).
 
 ## Tutorial
 
