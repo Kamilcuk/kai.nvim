@@ -885,8 +885,24 @@ function Chat:to_text()
 		[ChatRole.assistant] = "AI",
 		[ChatRole.user] = "ME",
 	}
-	local data = "Chat name=" .. self.name .. " file=" .. self:file() .. "\n"
-	for _, msg in ipairs(self.ms) do
+	local data = sprintf(
+		"::: Chat name=%s file=%s tokens=%d messages=%d\n",
+		self.name,
+		self:file(),
+		tok.num_tokens_from_messages(self.ms),
+		#self.ms
+	)
+	local trimms = tok.trim_messages_to_num_tokens(self.ms, config.chat_max_tokens)
+	local mark = #self.ms - (#trimms - 1)
+	for i, msg in ipairs(self.ms) do
+		if i == mark then
+			local new = sprintf(
+				"::: Context starts from here, there are %d tokens and %d messages below.\n",
+				tok.num_tokens_from_messages(trimms),
+				#trimms
+			)
+			data = data .. new
+		end
 		local ntokens = tok.ntokens(msg.content) + 3
 		local new = sprintf("%2s: %s\n", names[msg.role], msg.content)
 		data = data .. new
@@ -1217,13 +1233,13 @@ end
 function Openai:handle_response(txt, handle)
 	local success, json = pcall(vim.json.decode, txt)
 	if not success then
-		my.error("Could not decode json: %s", vim.inspect(txt))
+		my.error("Could not decode JSON from API: %s", vim.inspect(txt))
 	elseif type(json) ~= "table" then
-		my.error("Not a JSON dictionary: %s", vim.inspect(txt))
+		my.error("JSON from API is not a dictionary: %s", vim.inspect(txt))
 	elseif json.error and type(json.error) == "table" and json.error.message then
-		my.error(json.error.message)
+		my.error("API response: %s", json.error.message)
 	elseif not json.choices then
-		my.error("No choices in response: %s", vim.inspect(txt))
+		my.error("No choices in API response: %s", vim.inspect(txt))
 	elseif json.choices[1].text then
 		-- Response from completions and edits no-stream endpoint.
 		self:on_data(json.choices[1].text)
@@ -1731,12 +1747,17 @@ function M.AIChatList(args)
 	local txt = sprintf("There are %d chats.\n", #names)
 	---@type string[][]
 	local data = {}
-	table.insert(data, { "name", "file", "#tok", "init" })
+	table.insert(data, { "name", "#msgs", "#tok", "init" })
 	for _, name in ipairs(names) do
 		local chat = Chat.load(name)
-		table.insert(data, { chat.name, chat:file(), chat:ntokens(), sprintf("%q", chat:get_system_message()) })
+		table.insert(data, {
+			chat.name,
+			#chat.ms,
+			chat:ntokens(),
+			sprintf("%q", chat:get_system_message()),
+		})
 	end
-	txt = txt .. my.tabularize(data, { "", "-", "", "-" })
+	txt = txt .. my.tabularize(data, { "", "", "", "-" })
 	my.log("%s", txt)
 end
 
