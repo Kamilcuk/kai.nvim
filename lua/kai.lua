@@ -674,7 +674,7 @@ end
 ---@param max integer
 ---@return ChatMsg[]
 function tok.trim_messages_to_num_tokens(messages, max)
-	assert(#messages > 1)
+	assert(#messages > 0)
 	-- based on the above num_tokens_from_messages
 	-- assuming not gpt-3.5-turbo-0301
 	-- every message follows <|start|>{role/name}\n{content}<|end|>\n
