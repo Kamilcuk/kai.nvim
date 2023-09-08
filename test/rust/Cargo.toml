@@ -1,0 +1,6 @@
+[package]
+name = "hello_world" # the name of the package
+version = "0.1.0"    # the current version, obeying semver
+
+[dependencies]
+fancy-regex = "0.11.0"
