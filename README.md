@@ -39,6 +39,8 @@ kai_temperature number The temperature to send to other apis except chat/complet
 kai_timeout integer Timeout of curl in seconds.
 ```
 
+The max tokens for gpt-3 is 4096. The `kai_chat_max_tokens` is set to 3500, so that there are 500 tokens for the answer.
+
 ## How do I use this?
 
 Read [https://platform.openai.com/docs/guides/code](https://platform.openai.com/docs/guides/code)

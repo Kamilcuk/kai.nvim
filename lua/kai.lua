@@ -1,5 +1,7 @@
 -- Who had fun learning lua? This guy.
---
+
+local base64 = require("base64")
+
 -- {{{1 config
 --
 ---@class Config
@@ -22,7 +24,7 @@ local config_defaults = {
 	--
 	cache_dir = vim.fn.stdpath("cache") .. "/kai/",
 	chat_use = "default",
-	chat_max_tokens = 4000,
+	chat_max_tokens = 3500,
 	chat_temperature = 0,
 	completions_max_tokens = 2048,
 	completions_model = "text-davinci-003",
@@ -169,6 +171,84 @@ end
 ---@return string[]
 function my.splitlines(str)
 	return vim.split(str, "\n", { plain = true })
+end
+
+---@param array any[]
+---@param start integer
+---@param stop integer
+function my.slice(array, start, stop)
+	local pos = 1
+	local new = {}
+	for i = start, stop do
+		new[pos] = array[i]
+		pos = pos + 1
+	end
+	return new
+end
+
+---@generic T1
+---@generic T2
+---@param t {[T1]: T2}
+---@return {[T2]: T1}
+function my.table_invert(t)
+	local s = {}
+	for k, v in pairs(t) do
+		s[v] = k
+	end
+	return s
+end
+
+---@generic T
+---@param a {[integer]: T}
+---@param b {[integer]: T}
+---@return boolean
+function my.array_equal(a, b)
+	if #a ~= #b then
+		return false
+	end
+	---@type {[any]: integer}
+	local A = { unpack(a) }
+	local B = { unpack(b) }
+	table.sort(A)
+	table.sort(B)
+	for i, Ai in ipairs(A) do
+		if Ai ~= B[i] then
+			return false
+		end
+	end
+	return true
+end
+
+---@param func fun(string): integer
+---@return string
+function my.get_func_name(func)
+	local info = debug.getinfo(func)
+	if info.name then
+		return info.name
+	end
+	local source = info.source:gsub("^@", "")
+	local f = io.open(source, "r")
+	assert(f)
+	local count = 1
+	for line in f:lines() do
+		if count == info.linedefined then
+			f:close()
+			return line:gsub([[function *]], ""):gsub("[(].*$", "")
+		end
+		count = count + 1
+	end
+	f:close()
+	error("not enough lines in file")
+end
+
+function my.test()
+	assert(my.array_equal({ "a" }, { "b" }) == false)
+	assert(my.array_equal({ "a", "b" }, { "a", "c" }) == false)
+	assert(my.array_equal({ "a", "c" }, { "a", "b" }) == false)
+	assert(my.array_equal({ "a", "b" }, { "a", "b" }) == true)
+	local a = { 42302, 220, 4513, 10961, 22191, 3226, 2652, 518, 1761, 501, 25801, 76064, 80, 64966, 40122, 64966 }
+	assert(my.array_equal(a, a) == true)
+    assert(my.get_func_name(my.test) == "my.test")
 end
 
 -- }}}
@@ -391,10 +471,11 @@ Subprocess.__index = Subprocess
 ---@field on_start nil | fun(): nil
 ---@field on_line nil | fun(line: string, handle: Subprocess): nil
 ---@field on_exit nil | fun(code: integer, signal: integer, stderr: string): nil
+---@field check boolean?
 
 ---@param o SubprocessParam
 ---@return integer? nil if not run, otherwise the exit status of the process
-function Subprocess.spawn(o)
+function Subprocess.run(o)
 	assert(o.cmd)
 	local self = setmetatable({
 		cmd = o.cmd,
@@ -402,20 +483,33 @@ function Subprocess.spawn(o)
 		on_line = o.on_line or function() end,
 		on_exit = o.on_exit or function() end,
 	}, Subprocess)
-	return self:_do_run()
+	local returncode = self:_do_run()
+	if o.check then
+		assert(returncode == 0, sprintf("Command exited with %s: %s", vim.inspect(returncode), vim.inspect(o.cmd)))
+	end
+	return returncode
 end
 
 ---@param cmd string[]
 ---@return string
-function Subprocess.call_output(cmd)
+function Subprocess.check_output(cmd)
 	local out = ""
-	Subprocess.spawn({
+	Subprocess.run({
 		cmd = cmd,
 		on_line = function(line)
 			out = out .. (out == "" and "" or "\n") .. line
 		end,
+		check = true,
 	})
 	return out
+end
+
+---@param cmd string[]
+function Subprocess.check_call(cmd)
+	Subprocess.run({
+		cmd = cmd,
+		check = true,
+	})
 end
 
 ---@private
@@ -526,154 +620,307 @@ function Subprocess:__gc()
 end
 
 -- }}}
+-- {{{1 Encoder
+
+---@alias ranks_t {[string]: integer}
+
+-- Represents a single encoder for tokens for AI models.
+---@class Encoder
+---@field name string
+---@field vimpattern string
+---@field ranks ranks_t?
+local Enc = {}
+Enc.__index = Enc
+
+---@private
+---@return Encoder
+function Enc.new(name, vimpattern)
+	return setmetatable({
+		name = name,
+		vimpattern = vimpattern,
+	}, Enc)
+end
+
+---@return Encoder
+function Enc.new_cl50k_base()
+	return Enc.new(
+		"cl50k_base",
+		[=[\v('s|'t|'re|'ve|'m|'ll|'d| ?[[:alpha:]]+| ?[[:digit:]]+| ?[^\s[:alnum:]]+|\s+\S\@!|\s+)]=]
+	)
+end
+
+---@return Encoder
+function Enc.new_cl100k_base()
+	-- https://github.com/openai/tiktoken/blob/5d970c1100d3210b42497203d6b5c1e30cfda6cb/tiktoken_ext/openai_public.py#L76
+	return Enc.new(
+		"cl100k_base",
+		[=[\v\c('s|'t|'re|'ve|'m|'ll|'d|[^\r\n[:alnum:]]?[[:alpha:]]+|[[:digit:]]{1,3}| ?[^[:blank:][:alnum:]]+[\r\n]*|\s*[\r\n]+|\s+\S\@!|\s+)]=]
+	)
+end
+
+---@private
+---@return string
+function Enc:_cache_path()
+	return vim.fn.simplify(sprintf("%s/%s.lua", config.cache_dir, self.name))
+end
+
+---@private
+---@return ranks_t?
+function Enc:_cache_load()
+	local cachepath = self:_cache_path()
+	local loadcachefile = loadfile(cachepath)
+	if loadcachefile ~= nil then
+		local cache = loadcachefile()
+		if cache["version"] == 1 and cache["ranks"] ~= nil then
+			return cache["ranks"]
+		end
+	end
+end
+
+-- Create a cache for ranks.
+-- Because it takes a long time to download and parse the tiktoken token->rank database,
+-- I first download it and cache the download, then serialize the ranks to a .lua file.
+-- Then this file with ranks is loaded and that is pretty fast.
+---@private
+function Enc:_cache_create()
+	-- Download encoding
+	local url = sprintf("https://openaipublic.blob.core.windows.net/encodings/%s.tiktoken", self.name)
+	local filename = url:match("([^/]+)$")
+	local path = vim.fn.simplify(sprintf("%s/%s", config.cache_dir, filename))
+	local f = io.open(path, "r")
+	if f == nil then
+		-- download url
+		Subprocess.check_call({ "curl", "-sSo", path, url })
+		f = io.open(path, "r")
+		assert(f ~= nil, sprintf("Could not download %s to %s", url, path))
+	end
+	-- Serialize cachefile.
+	local cachepath = self:_cache_path()
+	local cachefile = io.open(cachepath, "w")
+	assert(cachefile ~= nil, sprintf("Could not open for writing: %s", cachepath))
+	cachefile:write('return {["version"]=1,["ranks"]={')
+	for line in f:lines() do
+		local tokenbase64, tokenrangestr = unpack(vim.split(line, " "))
+		local tokenrange = tonumber(tokenrangestr)
+		assert(tokenrange ~= nil, sprintf("%q is not a number", tokenrangestr))
+		local token = base64.decode(tokenbase64)
+		cachefile:write(sprintf("[%q]=%d,", token, tokenrange))
+	end
+	cachefile:write("}}")
+	f:close()
+	cachefile:close()
+end
+
+---@return ranks_t
+function Enc:get_ranks()
+	if self.ranks == nil then
+		local ranks = self:_cache_load()
+		if ranks == nil then
+			self:_cache_create()
+			ranks = self:_cache_load()
+			assert(ranks ~= nil, sprintf("Could not create cache %s", self:_cache_path()))
+		end
+		assert(ranks[" a"] == 264)
+		self.ranks = ranks
+	end
+	return self.ranks
+end
+
+---@return {[integer]: string}
+function Enc:get_inverted_ranks()
+    if self.ranks_to_tokens == nil then
+        self.ranks_to_tokens = my.table_invert(self:get_ranks())
+    end
+    return self.ranks_to_tokens
+end
+
+-- Splits a string into a list of (preliminary) tokens.
+---@param str string
+---@return string[]
+function Enc:split(str)
+	local separator = "\001"
+	assert(not str:find(separator), sprintf("String contains 0x%02x byte we use internally: %q", separator:byte(), str))
+	local out = vim.fn.substitute(str, self.vimpattern, "&" .. separator, "g")
+	local ret = vim.split(out, separator)
+	--Remove last element - it will be always empty, because we end the string with separator.
+	ret[#ret] = nil
+	--my.log("DEBUG vim_encode %s", vim.inspect(ret))
+	return ret
+end
+
+-- }}}
 -- {{{1 Tokenizer
 
+-- Tokenizer for ChatGPT. Algorithms copied from tiktoken.
 ---@class Tokenizer
-local tok = {}
+---@field private enc Encoder?
+local Tok = {}
+Tok.__index = Tok
 
--- Return the number of tokens in a string.
--- One token is defined as in OpenAI api, see https://platform.openai.com/tokenizer
--- https://stackoverflow.com/questions/72294775/how-do-i-know-how-much-tokens-a-gpt-3-request-used
----@param str string
----@return integer
-function tok.count_approx(str)
-	-- Count the number of words in str. One word is anything separated by spaces.
-	local nwords = 0
-	for _ in str:gmatch("%S+") do
-		nwords = nwords + 1
-	end
-	-- Calculate the offset for the initial token.
-	local init_offset = math.max(0, math.floor(nwords * 0.5))
-	-- Calculate the number of tokens.
-	-- returns an estimate of #tokens corresponding to #characters nchars
-	local scale = 1.2
-	local ret = (str:len() - init_offset) * math.exp(-1) * scale
-	return math.max(0, math.floor(ret))
+---@return Tokenizer
+function Tok.new()
+    return setmetatable({}, Tok)
 end
 
 ---@private
-function tok.has_tiktoken()
-	if vim.g.ai_has_tiktoken == nil then
-		vim.g.ai_has_tiktoken = os.execute('python3 -c "import tiktoken"') == 0
-	end
-	return vim.g.ai_has_tiktoken
+---@return Encoder
+function Tok:get_encoder()
+    if not self.enc then
+        self.enc = Enc.new_cl100k_base()
+    end
+    return self.enc
 end
 
----@param str string
----@return integer
+-- Given a piece that was matched with regex, find tokens from the list and return an array of them ranks.
 ---@private
-function tok.ntokens_tiktoken(str)
-	local ret = Subprocess.call_output({
-		"python3",
-		"-c",
-		"import sys,tiktoken;print(len(tiktoken.encoding_for_model(sys.argv[1]).encode(sys.argv[2])))",
-		"gpt-4",
-		str,
-	})
-	return tonumber(ret) or 0
-end
-
----@return boolean
-function tok.has_perl()
-	return vim.fn.executabe("perl")
-end
-
----@param str string
----@param regex string
----@return integer
-function tok.count_perl(str, regex)
-	--https://community.openai.com/t/what-is-the-openai-algorithm-to-calculate-tokens/58237/33
-	--print join("|", @count), "\n";
-	local perlscript = [=[
-	    local @count = $ARGV[1] =~ /$ARGV[0]/g;
-        print scalar @count;
-    ]=]
-	local out = Subprocess.call_output({
-		"perl",
-		"-e",
-		perlscript,
-		regex,
-		str,
-	})
-	if false then
-		my.log("perl %s", out:gsub("\n", " \\n "))
-		out = out:gsub("^[^\n]*\n", "")
+---@param piece string
+---@param ranks ranks_t
+---@return integer[]
+function Tok.pair_merge(piece, ranks)
+	-- https://github.com/openai/tiktoken/blob/main/src/lib.rs#L14
+	---@type integer
+	local INT32_MAX = 2147483647
+	---@type integer
+	local MAX = INT32_MAX
+	---@alias parts_t {[integer]: {[1]: integer, [2]: integer}}
+	---@type parts_t
+	local parts = {}
+	for i = 1, #piece + 1 do
+		parts[i] = { i, MAX }
 	end
-	return tonumber(out) or 0
-end
-
----@param str string
----@param pattern string
----@return integer
-function tok.count_vim(str, pattern)
-	if false then
-		local out2 = vim.fn.substitute(str, pattern, "&|", "g")
-		my.log("vim %s", out2)
+	--
+	---@param start_idx integer
+	---@return integer?
+	local function get_rank(start_idx)
+		local stop_idx = start_idx + 2
+		if stop_idx <= #parts then
+			return ranks[piece:sub(parts[start_idx][1], parts[stop_idx][1] - 1)]
+		else
+			return nil
+		end
 	end
-	local out = vim.fn.substitute(str, pattern, "1", "g")
-	return out:len()
+	--
+	for i = 1, #parts - 1 do
+		rank = get_rank(i)
+		if rank ~= nil then
+			assert(rank ~= MAX, sprintf("Could not get rank for %s with %d", piece, i))
+			parts[i][2] = rank
+		end
+	end
+	--
+	while #parts ~= 1 do
+		---@type {[1]: integer, [2]: integer}
+		local min_rank = { MAX, 0 }
+		for i, idxrank in ipairs(parts) do
+			if i ~= #parts then
+				local rank = idxrank[2]
+				if rank < min_rank[1] then
+					min_rank = { rank, i }
+				end
+			end
+		end
+		if min_rank[1] ~= MAX then
+			local i = min_rank[2]
+			table.remove(parts, i + 1)
+			parts[i][2] = get_rank(i) or MAX
+			if i > 1 then
+				parts[i - 1][2] = get_rank(i - 1) or MAX
+			end
+		else
+			break
+		end
+	end
+	assert(#parts >= 2, sprintf("parts=%s", vim.inspect(parts)))
+	---@type integer[]
+	local out = {}
+	for i = 1, #parts - 1 do
+		local part = piece:sub(parts[i][1], parts[i + 1][1] - 1)
+		local rank = ranks[part]
+		assert(rank ~= nil, sprintf("There is no %s in ranks i=%d parts=%d", part, i, #parts))
+		out[i] = rank
+	end
+	return out
 end
 
+---@private
+---@param piece string
+---@param ranks ranks_t
+---@return integer[]
+function Tok.byte_pair_encode(piece, ranks)
+	if #piece == 1 then
+		local rank = ranks[piece]
+		assert(rank ~= nil)
+		return { rank }
+	end
+	return Tok.pair_merge(piece, ranks)
+end
+
+-- Convert a string into tokens.
+---@param str string
+---@return integer[]
+function Tok:encode(str)
+    local enc = self:get_encoder()
+	local tokens = enc:split(str)
+	local ranks = enc:get_ranks()
+	---@type integer[]
+	local out = {}
+	for _, token in ipairs(tokens) do
+		rank = ranks[token]
+		if rank ~= nil then
+			out[#out + 1] = rank
+		else
+			local realtokens = Tok.pair_merge(token, ranks)
+			for _, i in ipairs(realtokens) do
+				out[#out + 1] = i
+			end
+		end
+	end
+	--my.log("encode %q -> %s -> %q", str, vim.inspect(out), tok.decode(out))
+	return out
+end
+
+-- Convert tokens into a string.
+---@param tokens integer[]
+---@return string
+function Tok:decode(tokens)
+    local enc = self:get_encoder()
+    local ranks_to_tokens = enc:get_inverted_ranks()
+	local out = ""
+	for _, token in ipairs(tokens) do
+		local res = ranks_to_tokens[token]
+		assert(res ~= nil, sprintf("No such token: %d", token))
+		out = out .. res
+	end
+	return out
+end
+
+-- Returns the number of tokens in a strng.
 ---@param str string
 ---@return integer
-function tok.count_perl_r50k_base(str)
-	return tok.count_perl(str, [=['s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+]=])
+function Tok:ntokens(str)
+	return #self:encode(str)
 end
 
----@param str string
----@return integer
-function tok.count_vim_r50k_base(str)
-	--Converted from perl regex above.
-	return tok.count_vim(
-		str,
-		[=[\('s\|'t\|'re\|'ve\|'m\|'ll\|'d\| \?[[:alpha:]]\+\| \?[[:digit:]]\+\| \?[^\s[:alnum:]]\+\|\s\+\S\@!\|\s\+\)]=]
-	)
-end
-
----@param str string
----@return integer
-function tok.count_perl_cl100k_base(str)
-	return tok.count_perl(
-		str,
-		[=[(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+]=]
-	)
-end
-
----@param str string
----@return integer
-function tok.count_vim_cl100k_base(str)
-	--Converted from perl regex above.
-	return tok.count_vim(
-		str,
-		[=[\c\('s\|'t\|'re\|'ve\|'m\|'ll\|'d\|[^\r\n[:alnum:]]\?[[:alpha:]]\+\|[[:digit:]]\{1,3}\| \?[^\s[:alnum:]]\+[\r\n]*\|\s*[\r\n]\+\|\s\+\S\@!\|\s\+\)]=]
-	)
-end
-
----@param str string
----@return integer
-function tok.ntokens(str)
-	return tok.count_vim_cl100k_base(str)
-end
-
+-- Returns the number of tokens in conversation with OpenAI
 ---@param messages ChatMsg[]
 ---@return integer
-function tok.num_tokens_from_messages(messages)
+function Tok:num_tokens_from_messages(messages)
 	-- based on num_tokens_from_messages from
 	-- https://github.com/openai/openai-cookbook/blob/main/examples/How_to_count_tokens_with_tiktoken.ipynb
 	local tokens_per_message = 3
 	-- every reply is primed with <|start|>assistant<|message|>
 	local num_tokens = 3
 	for _, m in ipairs(messages) do
-		num_tokens = num_tokens + tokens_per_message + tok.ntokens(m.role) + tok.ntokens(m.content)
+		num_tokens = num_tokens + tokens_per_message + self:ntokens(m.role) + self:ntokens(m.content)
 	end
 	return num_tokens
 end
 
--- Returns number of most recent messages with number of tokens lower than max.
+-- Returns the most recent messages with number of tokens lower than max.
 ---@param messages ChatMsg[]
 ---@param max integer
 ---@return ChatMsg[]
-function tok.trim_messages_to_num_tokens(messages, max)
+function Tok:trim_messages_to_num_tokens(messages, max)
 	assert(#messages > 0)
 	-- based on the above num_tokens_from_messages
 	-- assuming not gpt-3.5-turbo-0301
@@ -688,11 +935,11 @@ function tok.trim_messages_to_num_tokens(messages, max)
 		m = messages[1]
 		loopstartidx = 2
 		table.insert(ret, m)
-		num_tokens = num_tokens + tokens_per_message + tok.ntokens(m.role) + tok.ntokens(m.content)
+		num_tokens = num_tokens + tokens_per_message + self:ntokens(m.role) + self:ntokens(m.content)
 	end
 	for i = #messages, loopstartidx, -1 do
 		local m = messages[i]
-		num_tokens = num_tokens + tokens_per_message + tok.ntokens(m.role) + tok.ntokens(m.content)
+		num_tokens = num_tokens + tokens_per_message + self:ntokens(m.role) + self:ntokens(m.content)
 		if num_tokens >= max then
 			break
 		end
@@ -701,71 +948,165 @@ function tok.trim_messages_to_num_tokens(messages, max)
 	return ret
 end
 
----@param func fun(string): integer
----@return string
-function tok.get_func_name(func)
-	local info = debug.getinfo(func)
-	if info.name then
-		return info.name
-	end
-	local source = info.source:gsub("^@", "")
-	local f = io.open(source, "r")
-	assert(f)
-	local count = 1
-	for line in f:lines() do
-		if count == info.linedefined then
-			f:close()
-			return line:gsub([[function *tok.count_]], ""):gsub("[(].*$", "")
-		end
-		count = count + 1
-	end
-	f:close()
-	error("not enough lines in file")
-end
-
----@param func fun(string): integer
+--- Test if encoding and decoding back is fine.
 ---@param str string
----@param val integer
+---@param shouldbe integer[]
 ---@return integer
-function tok._test(func, str, val)
-	local res = func(str)
-	local name = tok.get_func_name(func)
-	local err = res ~= val
-	local pre = err and "DIFF:" or ""
-	local eq = err and "!=" or "=="
-	local desc = sprintf("%5s %18s(%q) = %d %s %d", pre, name, str, res, eq, val)
+function Tok:_test_encode_decode(str, shouldbe)
+	local tokens = self:encode(str)
+	local success = my.array_equal(tokens, shouldbe)
+	local pre = success and "" or "ERROR"
+	local eq = success and "==" or "!="
+	local desc = sprintf("%5s encode(%q)", pre, str)
+	if not success then
+		desc = desc .. sprintf(" %s\n  %s\n  %s", eq, vim.inspect(tokens), vim.inspect(shouldbe))
+	end
 	my.log("%s", desc)
-	return err and 1 or 0
+	local strdecode = self:decode(tokens)
+	local successdecode = strdecode == str
+	local predecode = successdecode and "" or "ERROR"
+	local eqdecode = successdecode and "==" or "!="
+	local descdecode = sprintf("%5s decode(encode(%q)) %s %s", predecode, str, eqdecode, strdecode)
+	my.log("%s", descdecode)
+	return success and 0 or 1
 end
 
-function tok.test()
-	---@type {[1]: string, [2]: integer}[]
+--- Test generating tokens.
+---@private
+function Tok:_test_cl100_base()
+	---@type {[1]: string, [2]: integer[]}[]
 	local tests = {
-		{ " a", 1 },
-		{ "a ", 2 },
-		{ "a b", 2 },
-		{ "a b ", 3 },
-		{ "a b c", 3 },
-		{ "12345647657", 5 },
-		{ "abcdef 12345647657 ;',./pl[flewq'l abc'l", 21 },
-		{ "You miss 100% of the shots you don't take", 13 },
-		{ "You miss 100% of the shots you don’t take", 13 },
-	}
-	---@type (fun(string): integer)[]
-	local backends = {
-		tok.count_approx,
-		tok.count_perl_cl100k_base,
-		tok.count_vim_cl100k_base,
-		tok.count_perl_r50k_base,
-		tok.count_vim_r50k_base,
+		{ " a", { 264 } },
+		{ "a ", { 64, 220 } },
+		{ "a b", { 64, 293 } },
+		{ "a b ", { 64, 293, 220 } },
+		{ "a b c", { 64, 293, 272 } },
+		{ "12345647657", { 4513, 10961, 22191, 3226 } },
+		{ ", ", { 11, 220 } },
+		{ "as ", { 300, 220 } },
+		{ "llo", { 75, 385 } },
+		{ "',.", { 518, 13 } },
+		{
+			"abcdef 12345647657 ;',./pl[flewq'l abc'l",
+			{ 42302, 220, 4513, 10961, 22191, 3226, 2652, 518, 1761, 501, 25801, 76064, 80, 64966, 40122, 64966 },
+		},
+		{
+			"You miss 100% of the shots you don't take",
+			{ 2675, 3194, 220, 1041, 4, 315, 279, 15300, 499, 1541, 956, 1935 },
+		},
+		{
+			"You miss 100% of the shots you don’t take",
+			{ 2675, 3194, 220, 1041, 4, 315, 279, 15300, 499, 1541, 1431, 1935 },
+		},
+		{ "system", { 9125 } },
+		{ "user", { 882 } },
+		{
+			"You are a helpful, pattern-following assistant that translates corporate jargon into plain English.",
+			{
+				2675,
+				527,
+				264,
+				11190,
+				11,
+				5497,
+				93685,
+				287,
+				18328,
+				430,
+				48018,
+				13166,
+				503,
+				71921,
+				1139,
+				14733,
+				6498,
+				13,
+			},
+		},
+		{ "synergies", { 23707, 39624, 552 } },
+		{
+			"New synergies will help drive top-line growth.",
+			{ 3648, 80526, 552, 690, 1520, 6678, 1948, 8614, 6650, 13 },
+		},
+		{ "Things working well together will increase revenue.", { 42575, 3318, 1664, 3871, 690, 5376, 13254, 13 } },
+		{
+			"Let's circle back when we have more bandwidth to touch base on opportunities for increased leverage.",
+			{ 10267, 596, 12960, 1203, 994, 584, 617, 810, 34494, 311, 5916, 2385, 389, 10708, 369, 7319, 33164, 13 },
+		},
+		{
+			"Let's talk later when we're less busy about how to do better.",
+			{ 10267, 596, 3137, 3010, 994, 584, 2351, 2753, 13326, 922, 1268, 311, 656, 2731, 13 },
+		},
+		{
+			"This late pivot means we don't have time to boil the ocean for the client deliverable.",
+			{
+				2028,
+				3389,
+				27137,
+				3445,
+				584,
+				1541,
+				956,
+				617,
+				892,
+				311,
+				44790,
+				279,
+				18435,
+				369,
+				279,
+				3016,
+				6493,
+				481,
+				13,
+			},
+		},
 	}
 	local errors = 0
 	for _, test in ipairs(tests) do
-		for _, backend in ipairs(backends) do
-			errors = errors + tok._test(backend, test[1], test[2])
-		end
+		errors = errors + self:_test_encode_decode(test[1], test[2])
 	end
-	-- assert(errors == 0)
+	assert(errors == 0)
+end
+
+--- Test calculating number of tokens from an example conversation.
+---@private
+function Tok:_test_message()
+	local errors = 0
+	local example_messages = {
+		{
+			["role"] = "system",
+			["content"] = "You are a helpful, pattern-following assistant that translates corporate jargon into plain English.",
+		},
+		{
+			["role"] = "system",
+			["content"] = "New synergies will help drive top-line growth.",
+		},
+		{
+			["role"] = "system",
+			["content"] = "Things working well together will increase revenue.",
+		},
+		{
+			["role"] = "system",
+			["content"] = "Let's circle back when we have more bandwidth to touch base on opportunities for increased leverage.",
+		},
+		{
+			["role"] = "system",
+			["content"] = "Let's talk later when we're less busy about how to do better.",
+		},
+		{
+			["role"] = "user",
+			["content"] = "This late pivot means we don't have time to boil the ocean for the client deliverable.",
+		},
+	}
+	local tokens = self:num_tokens_from_messages(example_messages)
+	assert(tokens == 115, sprintf("Messages have %d tokens not 115", tokens))
+end
+
+function Tok.test()
+    local obj = Tok.new()
+	obj:_test_cl100_base()
+	obj:_test_message()
 end
 
 -- }}}
@@ -806,6 +1147,7 @@ end
 ---@class Chat Global array of all chat messages in the "chat" format.
 ---@field name string
 ---@field ms ChatMsg[] Chat messages with ChatGPT
+---@field tok Tokenizer
 local Chat = {}
 Chat.__index = Chat
 
@@ -821,6 +1163,7 @@ function Chat.new(name, initmsg)
 	return setmetatable({
 		name = name,
 		ms = { ChatMsg(ChatRole.system, initmsg or chatDefaultInitMsg) },
+        tok = Tok.new(),
 	}, Chat)
 end
 
@@ -856,7 +1199,7 @@ end
 ---@return ChatMsg[]
 function Chat:get_trimmed_messages()
 	assert(config.chat_max_tokens >= 0)
-	local ms = tok.trim_messages_to_num_tokens(self.ms, config.chat_max_tokens)
+	local ms = self.tok:trim_messages_to_num_tokens(self.ms, config.chat_max_tokens)
 	assert(#ms > 0, "Your query was longer that the g:kai_chat_max_tokens!")
 	return ms
 end
@@ -874,7 +1217,7 @@ end
 -- Return the global number of tokens in all messages.
 ---@return integer
 function Chat:ntokens()
-	return tok.num_tokens_from_messages(self.ms)
+	return self.tok:num_tokens_from_messages(self.ms)
 end
 
 -- Convert chat to text for the use of chat window.
@@ -889,21 +1232,21 @@ function Chat:to_text()
 		"::: Chat name=%s file=%s tokens=%d messages=%d\n",
 		self.name,
 		self:file(),
-		tok.num_tokens_from_messages(self.ms),
+		self.tok:num_tokens_from_messages(self.ms),
 		#self.ms
 	)
-	local trimms = tok.trim_messages_to_num_tokens(self.ms, config.chat_max_tokens)
+	local trimms = self.tok:trim_messages_to_num_tokens(self.ms, config.chat_max_tokens)
 	local mark = #self.ms - (#trimms - 1)
 	for i, msg in ipairs(self.ms) do
 		if i == mark then
 			local new = sprintf(
 				"::: Context starts from here, there are %d tokens and %d messages below.\n",
-				tok.num_tokens_from_messages(trimms),
+				self.tok:num_tokens_from_messages(trimms),
 				#trimms
 			)
 			data = data .. new
 		end
-		local ntokens = tok.ntokens(msg.content) + 3
+		local ntokens = self.tok:ntokens(msg.content) + 3
 		local new = sprintf("%2s: %s\n", names[msg.role], msg.content)
 		data = data .. new
 	end
@@ -1205,7 +1548,7 @@ end
 
 ---@param cmd string[] The command to run.
 function Openai:exe(cmd)
-	Subprocess.spawn({
+	Subprocess.run({
 		cmd = cmd,
 		on_start = function()
 			self.cb:on_start()
@@ -1400,7 +1743,7 @@ end
 function Openai.embeddings_prompt_tokens(txt)
 	local body = { model = "text-embedding-ada-002", input = txt }
 	local curl = Openai._get_curl("embeddings", body)
-	local acc = Subprocess.call_output(curl)
+	local acc = Subprocess.check_output(curl)
 	local json = vim.json.decode(acc)
 	return tonumber(json.usage.prompt_tokens)
 end
@@ -1556,7 +1899,7 @@ end
 -- {{{1 M.AI
 
 ---@class M
-local M = { tok = tok, my = my, Chat = Chat }
+local M = { tok = Tok, my = my, Chat = Chat }
 
 ---@param opts table
 function M.setup(opts)
