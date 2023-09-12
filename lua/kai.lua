@@ -1332,12 +1332,19 @@ end
 -- Constructor
 ---@param name string
 function Chat.load(name)
-	Chat.assert_exists(name)
+    Chat.assert_exists(name)
+    return Chat.load_or_create(name)
+end
+
+-- Loads chat messages history from file.
+-- Constructor
+---@param name string
+function Chat.load_or_create(name)
 	local ret = Chat.new(name)
 	local filename = Chat._file(name)
 	local err, ms = Chat._load(filename)
 	if ms == nil and err == nil then
-		my.log("Started new chat at %s", filename)
+		my.log("Started new chat %s at %s", ret.name, filename)
 	elseif err ~= nil then
 		my.error("Error loading file %s: %s", filename, err)
 	end
@@ -1990,7 +1997,7 @@ function M.AI(args, model)
 	if cmd:inchatbuffer() then
 		name = vim.api.nvim_buf_get_name(cmd.buffer):gsub(".*[[]", ""):gsub("[]]", "")
 	end
-	local chat = Chat.load(name)
+	local chat = Chat.load_or_create(name)
 	chat:append_user(prompt)
 	if cmd:inchatbuffer() then
 		chat:append(ChatRole.assistant, "")
