@@ -248,7 +248,14 @@ function my.test()
 	assert(my.array_equal({ "a", "b" }, { "a", "b" }) == true)
 	local a = { 42302, 220, 4513, 10961, 22191, 3226, 2652, 518, 1761, 501, 25801, 76064, 80, 64966, 40122, 64966 }
 	assert(my.array_equal(a, a) == true)
-    assert(my.get_func_name(my.test) == "my.test")
+	assert(my.get_func_name(my.test) == "my.test")
+end
+
+function my.mkcachedir()
+	if vim.fn.isdirectory(config.cache_dir) == 0 then
+		ret = vim.fn.mkdir(config.cache_dir, "p")
+		assert(ret ~= 0, sprintf("Cound not create cache directory: %s", config.cache_dir))
+	end
 end
 
 -- }}}
@@ -689,6 +696,7 @@ function Enc:_cache_create()
 	local path = vim.fn.simplify(sprintf("%s/%s", config.cache_dir, filename))
 	local f = io.open(path, "r")
 	if f == nil then
+		my.mkcachedir()
 		-- download url
 		Subprocess.check_call({ "curl", "-sSo", path, url })
 		f = io.open(path, "r")
@@ -728,10 +736,10 @@ end
 
 ---@return {[integer]: string}
 function Enc:get_inverted_ranks()
-    if self.ranks_to_tokens == nil then
-        self.ranks_to_tokens = my.table_invert(self:get_ranks())
-    end
-    return self.ranks_to_tokens
+	if self.ranks_to_tokens == nil then
+		self.ranks_to_tokens = my.table_invert(self:get_ranks())
+	end
+	return self.ranks_to_tokens
 end
 
 -- Splits a string into a list of (preliminary) tokens.
@@ -759,16 +767,16 @@ Tok.__index = Tok
 
 ---@return Tokenizer
 function Tok.new()
-    return setmetatable({}, Tok)
+	return setmetatable({}, Tok)
 end
 
 ---@private
 ---@return Encoder
 function Tok:get_encoder()
-    if not self.enc then
-        self.enc = Enc.new_cl100k_base()
-    end
-    return self.enc
+	if not self.enc then
+		self.enc = Enc.new_cl100k_base()
+	end
+	return self.enc
 end
 
 -- Given a piece that was matched with regex, find tokens from the list and return an array of them ranks.
@@ -859,7 +867,7 @@ end
 ---@param str string
 ---@return integer[]
 function Tok:encode(str)
-    local enc = self:get_encoder()
+	local enc = self:get_encoder()
 	local tokens = enc:split(str)
 	local ranks = enc:get_ranks()
 	---@type integer[]
@@ -883,8 +891,8 @@ end
 ---@param tokens integer[]
 ---@return string
 function Tok:decode(tokens)
-    local enc = self:get_encoder()
-    local ranks_to_tokens = enc:get_inverted_ranks()
+	local enc = self:get_encoder()
+	local ranks_to_tokens = enc:get_inverted_ranks()
 	local out = ""
 	for _, token in ipairs(tokens) do
 		local res = ranks_to_tokens[token]
@@ -1104,7 +1112,7 @@ function Tok:_test_message()
 end
 
 function Tok.test()
-    local obj = Tok.new()
+	local obj = Tok.new()
 	obj:_test_cl100_base()
 	obj:_test_message()
 end
@@ -1163,7 +1171,7 @@ function Chat.new(name, initmsg)
 	return setmetatable({
 		name = name,
 		ms = { ChatMsg(ChatRole.system, initmsg or chatDefaultInitMsg) },
-        tok = Tok.new(),
+		tok = Tok.new(),
 	}, Chat)
 end
 
@@ -1332,8 +1340,8 @@ end
 -- Constructor
 ---@param name string
 function Chat.load(name)
-    Chat.assert_exists(name)
-    return Chat.load_or_create(name)
+	Chat.assert_exists(name)
+	return Chat.load_or_create(name)
 end
 
 -- Loads chat messages history from file.
@@ -1374,12 +1382,7 @@ function Chat:save()
 	if config.mock ~= "" then
 		return true
 	end
-	if vim.fn.isdirectory(config.cache_dir) == 0 then
-		if vim.fn.mkdir(config.cache_dir, "p") == 0 then
-			my.log("Cound not create directory to save chat messages %s", config.cache_dir)
-			return false
-		end
-	end
+	my.mkcachedir()
 	-- Save to temporary file
 	local tmpfile = self:file() .. ".tmp"
 	local file = io.open(tmpfile, "w")
