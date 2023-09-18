@@ -12,7 +12,10 @@ local base64 = require("base64")
 ---@field chat_use string The current conversation chat to use.
 ---@field chat_max_tokens integer The maximum number of tokens to send to chat/completions API. There is a limit in the API.
 ---@field chat_temperature number The temperature option when talking to chat/completions API.
+---@field chat_model string The default chat model to use
 ---@field completions_max_tokens integer The maximum number of tokens to send to completions API.
+---@field completions_model string The completions model to use
+---@field edit_model string The edits API model to use
 ---@field context_after integer The default number of lines to send to completions API after cursor.
 ---@field context_before integer The default number of lines to send to completione API before cursor.
 ---@field indicator_text string The indication to show on the indication panel when working.
@@ -26,8 +29,11 @@ local config_defaults = {
 	chat_use = "default",
 	chat_max_tokens = 3500,
 	chat_temperature = 0,
+	chat_model = "gpt-3.5-turbo",
 	completions_max_tokens = 2048,
 	completions_model = "text-davinci-003",
+	-- completions_model = "gpt-3.5-turbo-instruct",
+	edit_model = "code-davinci-edit-001",
 	context_after = 20,
 	context_before = 20,
 	indicator_text = "🤖",
@@ -1589,8 +1595,8 @@ function Openai:handle_response(txt, handle)
 		my.error("Could not decode JSON from API: %s", vim.inspect(txt))
 	elseif type(json) ~= "table" then
 		my.error("JSON from API is not a dictionary: %s", vim.inspect(txt))
-	elseif json.error and type(json.error) == "table" and json.error.message then
-		my.error("API response: %s", json.error.message)
+	elseif json.error then
+		my.error("API response: %s %s", json.error.type or "", json.error.message or "")
 	elseif not json.choices then
 		my.error("No choices in API response: %s", vim.inspect(txt))
 	elseif json.choices[1].text then
@@ -1745,17 +1751,6 @@ end
 function Openai:edits(body)
 	body = vim.tbl_extend("keep", body, { temperature = config.temperature })
 	self:_request("edits", body)
-end
-
--- Use embeddings API to count the tokens in a string.
----@param txt string
----@return integer?
-function Openai.embeddings_prompt_tokens(txt)
-	local body = { model = "text-embedding-ada-002", input = txt }
-	local curl = Openai._get_curl("embeddings", body)
-	local acc = Subprocess.check_output(curl)
-	local json = vim.json.decode(acc)
-	return tonumber(json.usage.prompt_tokens)
 end
 
 ---@param chat Chat
@@ -1935,7 +1930,7 @@ end
 ---@param args Args
 ---@param model string?
 function M.AIE(args, model)
-	model = model or "code-davinci-edit-001"
+	model = model or config.edit_model
 	--
 	local cmd = Cmd.new(args)
 	local context = cmd:get_context()
@@ -1957,7 +1952,7 @@ end
 ---@param args Args
 ---@param model string?
 function M.AI(args, model)
-	model = model or "gpt-3.5-turbo"
+	model = model or config.chat_model
 	--
 	local cmd = Cmd.new(args)
 	cmd.buffern:chatbuffermodify()
@@ -2010,6 +2005,11 @@ function M.AI(args, model)
 	end
 	--
 	cmd:openai(replace):chat(chat, { model = model })
+end
+
+---@param args Args
+function M.AI3(args)
+	M.AI(args, "gpt-3.5-turbo")
 end
 
 ---@param args Args

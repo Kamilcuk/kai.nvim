@@ -31,7 +31,10 @@ kai_cache_dir string The cache dir used to store conversations history.
 kai_chat_use string The current conversation chat to use.
 kai_chat_max_tokens integer The maximum number of tokens to send to chat/completions API. There is a limit in the API.
 kai_chat_temperature number The temperature option when talking to chat/completions API.
+kai_chat_model string The default chat model to use
 kai_completions_max_tokens integer The maximum number of tokens to send to completions API.
+kai_completions_model string The completions model to use
+kai_edit_model string The edits API model to use
 kai_context_after integer The default number of lines to send to completions API after cursor.
 kai_context_before integer The default number of lines to send to completione API before cursor.
 kai_indicator_text string The indication to show on the indication panel when working.
