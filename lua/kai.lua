@@ -5,10 +5,10 @@ local base64 = require("kai/base64")
 -- {{{1 config
 --
 ---@class Config
----@field mock string?
----@field debug boolean
----
----@field cache_dir string The cache dir used to store conversations history.
+---@field loaded boolean Set to true skip loading this plugin with AI user commands.
+---@field mock string? Used for debugging.
+---@field debug boolean Increase verbosity.
+---@field cache_dir string The cache dir used to store conversations history. default: stdpath(cache)/kai/
 ---@field chat_use string The current conversation chat to use.
 ---@field chat_max_tokens integer The maximum number of tokens to send to chat/completions API. There is a limit in the API.
 ---@field chat_temperature number The temperature option when talking to chat/completions API.
@@ -22,6 +22,7 @@ local base64 = require("kai/base64")
 ---@field temperature number The temperature to send to other apis except chat/completions API.
 ---@field timeout integer Timeout of curl in seconds.
 local config_defaults = {
+    loaded = false,
 	mock = "",
 	debug = false,
 	--
@@ -1962,49 +1963,30 @@ local function complete_chat_models()
 	end)
 end
 
--- }}}
--- {{{1 M.AI
-
----@class Commands
-
 -- VIM command options.
 ---@class CommandOpts
 ---@field range boolean?
 ---@field nargs "*"|"?"|number?
 ---@field completion CompletionFunc?
 
--- The main module return.
----@class M
----@field private opts table<fun(Args): nil, CommandOpts>
----@field command Commands
-local M = { opts = {}, command = {}, tok = Tok, my = my, Chat = Chat }
+---@type table<CompletionFunc, CommandOpts>
+local cmdopts = {}
 
 ---@param cb fun(Args): nil
 ---@param opts CommandOpts
-function M.addopts(cb, opts)
-    M.opts[cb] = opts
+local function addcmd(cb, opts)
+	cmdopts[cb] = opts
 end
 
----@param args Args
-function M.command.AIA(args)
-	local cmd = Cmd.new(args)
-	local cursor = cmd.cursor
-	local replace = Region.new(cursor, cursor)
-	local context = cmd:get_context()
-	assert(context.start <= cursor and cursor <= context.stop, "Cursor position has to be inside selected region")
-	local prefix = cmd:buffer_get_text(Region.new(context.start, cursor))
-	local suffix = cmd:buffer_get_text(Region.new(cursor, context.stop))
-	prefix = cmd:prefix_with_prompt(prefix)
-	-- print(vim.inspect(prefix), vim.inspect(suffix))
-	cmd:openai(replace):completions({ prompt = prefix, suffix = suffix })
-end
-M.addopts(M.command.AIA, { range = true, nargs = "*" })
+-- }}}
+-- {{{1 Commands
 
--------------------------------------------------------------------------------
+---@class Commands
+local Commands = {}
 
 ---@param args Args
 ---@param model string?
-function M.command.AIE(args, model)
+function Commands.AIE(args, model)
 	model = model or config.edit_model
 	--
 	local cmd = Cmd.new(args)
@@ -2017,17 +1999,15 @@ function M.command.AIE(args, model)
 		instruction = cmd.prompt,
 	})
 end
-M.addopts(M.command.AIE, { range = true, nargs = "*" })
+addcmd(Commands.AIE, { range = true, nargs = "*" })
 
-function M.command.AIEText(args)
-	M.command.AIE(args, "text-davinci-edit-001")
+function Commands.AIEText(args)
+	Commands.AIE(args, "text-davinci-edit-001")
 end
-M.addopts(M.command.AIEText, { range = true, nargs = "*" })
-
--------------------------------------------------------------------------------
+addcmd(Commands.AIEText, { range = true, nargs = "*" })
 
 ---@param args Args
-function M.command.AI(args)
+function Commands.AI(args)
 	--
 	local cmd = Cmd.new(args)
 	cmd.buffern:chatbuffermodify()
@@ -2081,10 +2061,10 @@ function M.command.AI(args)
 	--
 	cmd:openai(replace):chat(chat, { model = config.chat_model })
 end
-M.addopts(M.command.AI, { range = true, nargs = "*" })
+addcmd(Commands.AI, { range = true, nargs = "*" })
 
 ---@param args Args
-function M.command.AIModel(args)
+function Commands.AIModel(args)
 	local m = args.fargs[1]
 	if m ~= nil then
 		assert(vim.tbl_contains(openai_chat_models, m))
@@ -2092,10 +2072,10 @@ function M.command.AIModel(args)
 	end
 	my.log("Using chat model: %s", config.chat_model)
 end
-M.addopts(M.command.AIModel, { nargs = "?", complete = complete_chat_models() })
+addcmd(Commands.AIModel, { nargs = "?", complete = complete_chat_models() })
 
 ---@param args Args
-function M.command.AIChatNew(args)
+function Commands.AIChatNew(args)
 	local name = args.fargs[1]
 	local prompt = table.concat(vim.list_slice(args.fargs, 2), " ")
 	assert(
@@ -2106,19 +2086,19 @@ function M.command.AIChatNew(args)
 	vim.g.kai_chat_use = name
 	my.log("Created chat %s and switched to it", name)
 end
-M.addopts(M.command.AIChatNew, { nargs = "*" })
+addcmd(Commands.AIChatNew, { nargs = "*" })
 
 ---@param args Args
-function M.command.AIChatUse(args)
+function Commands.AIChatUse(args)
 	assert(#args.fargs == 1, sprintf("Wrong number of arguments: %d", #args.fargs))
 	local name = args.fargs[1]
 	Chat.load(name)
 	vim.g.kai_chat_use = name
 end
-M.addopts(M.command.AIChatUse, { nargs = 1, complete = complete_chat_names() })
+addcmd(Commands.AIChatUse, { nargs = 1, complete = complete_chat_names() })
 
 ---@param args Args
-function M.command.AIChatOpen(args)
+function Commands.AIChatOpen(args)
 	assert(#args.fargs <= 1, sprintf("Wrong number of arguments: %d", #args.fargs))
 	local name = args.fargs[1] or config.chat_use
 	local chat = Chat.load(name)
@@ -2147,19 +2127,19 @@ function M.command.AIChatOpen(args)
 	chat.show_m_e(buffer)
 	vim.api.nvim_buf_set_option(buffer, "modifiable", false)
 end
-M.addopts(M.command.AIChatOpen, { nargs = "?", complete = complete_chat_names() })
+addcmd(Commands.AIChatOpen, { nargs = "?", complete = complete_chat_names() })
 
 ---@param args Args
-function M.command.AIChatView(args)
+function Commands.AIChatView(args)
 	assert(#args.fargs <= 1, sprintf("Wrong number of arguments: %d", #args.fargs))
 	local name = args.fargs[1] or config.chat_use
 	local txt = Chat.load(name):to_text()
 	my.log("%s", txt)
 end
-M.addopts(M.command.AIChatView, { nargs = "?", complete = complete_chat_names() })
+addcmd(Commands.AIChatView, { nargs = "?", complete = complete_chat_names() })
 
 ---@param args Args
-function M.command.AIChatList(args)
+function Commands.AIChatList(args)
 	assert(#args.fargs == 0, sprintf("Wrong number of arguments: %d", #args.fargs))
 	local names = Chat.listnames()
 	local txt = sprintf("There are %d chats.\n", #names)
@@ -2178,18 +2158,56 @@ function M.command.AIChatList(args)
 	txt = txt .. my.tabularize(data, { "", "", "", "-" })
 	my.log("%s", txt)
 end
-M.addopts(M.command.AIChatList, {})
+addcmd(Commands.AIChatList, {})
 
 ---@param args Args
-function M.command.AIChatRemove(args)
+function Commands.AIChatRemove(args)
 	assert(#args.fargs <= 1, sprintf("Wrong number of arguments: %d", #args.fargs))
 	local name = args.fargs[1] or config.chat_use
 	Chat.assert_exists(name)
 	Chat.new(name):delete()
 end
-M.addopts(M.command.AIChatRemove, { nargs = 1, complete = complete_chat_names() })
+addcmd(Commands.AIChatRemove, { nargs = 1, complete = complete_chat_names() })
 
--------------------------------------------------------------------------------
+-- Mnemonic from AI Add.
+-- This is the main command that I use for filling up unfinished functions.
+-- By default takes 20 lines before position and 20 lines after the cursor position.
+-- Sends that to [completions OpenAI API](https://platform.openai.com/docs/api-reference/completions).
+-- The response from API is added into the buffer at cursor position.
+-- Command takes a prompt
+--   - `:AIA write code here that changes the world`
+--   - The prompt is added to the before part with two newline and three backticks.
+-- Command takes a single number
+--   - A single number specifies the number of lines before and after cursor position to send to the API.
+--       - `:20AIA` is the default. For example: `:40AIA` `:1000AIA`
+--       - The single number does _not_ represent the line number, I decided that is useless.
+-- Command takes a line range
+--   - A range specifies the number of lines to send the API.
+--       - `:-20,+10AIA` `:%AIA` `:'<,'>AIA`
+--       - Takes the selection and split it on cursor position for before and after sections.
+---@param args Args
+function Commands.AIA(args)
+	local cmd = Cmd.new(args)
+	local cursor = cmd.cursor
+	local replace = Region.new(cursor, cursor)
+	local context = cmd:get_context()
+	assert(context.start <= cursor and cursor <= context.stop, "Cursor position has to be inside selected region")
+	local prefix = cmd:buffer_get_text(Region.new(context.start, cursor))
+	local suffix = cmd:buffer_get_text(Region.new(cursor, context.stop))
+	prefix = cmd:prefix_with_prompt(prefix)
+	-- print(vim.inspect(prefix), vim.inspect(suffix))
+	cmd:openai(replace):completions({ prompt = prefix, suffix = suffix })
+end
+addcmd(Commands.AIA, { range = true, nargs = "*" })
+
+-- }}}
+-- {{{ M
+
+-- The main module return.
+---@class M
+---@field command Commands
+local M = { commands = Commands, tok = Tok, my = my, Chat = Chat }
+
 
 ---@param args Args
 local function cmd_dispatcher(args)
@@ -2202,13 +2220,16 @@ local function cmd_dispatcher(args)
 		end
 	end
 	-- Call the command with command. prepended.
-	require("kai").command[args.name](args)
+	require("kai").commands[args.name](args)
 end
 
 function M.setup()
-	for k, v in pairs(M.command) do
+	for k, v in pairs(M.commands) do
+        assert(type(k) == "string")
+        assert(type(v) == "function")
+        assert(type(cmdopts[v]) == "table")
 		--my.debug("create_user_command %s with %s", k, vim.inspect(M.opts[v]))
-		vim.api.nvim_create_user_command(k, cmd_dispatcher, M.opts[v])
+		vim.api.nvim_create_user_command(k, cmd_dispatcher, cmdopts[v])
 	end
 end
 
