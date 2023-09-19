@@ -22,7 +22,7 @@ local base64 = require("kai/base64")
 ---@field temperature number The temperature to send to other apis except chat/completions API.
 ---@field timeout integer Timeout of curl in seconds.
 local config_defaults = {
-    loaded = false,
+	loaded = false,
 	mock = "",
 	debug = false,
 	--
@@ -1984,6 +1984,12 @@ end
 ---@class Commands
 local Commands = {}
 
+-- Mnemonic from AI Edit.
+-- Uses [edits OpenAI API](https://platform.openai.com/docs/api-reference/moderations).
+-- Just `:AIA`, by default sends 20 lines before and after cursor position.
+-- Takes prompt sends as instruction.
+-- I typically select text and use `:'<,'>AIE do this`.
+-- `%AIE do this`
 ---@param args Args
 ---@param model string?
 function Commands.AIE(args, model)
@@ -2001,11 +2007,22 @@ function Commands.AIE(args, model)
 end
 addcmd(Commands.AIE, { range = true, nargs = "*" })
 
+-- Like `:AIE` but uses `text-davinci-edit-001` model instead of `code-davinci-edit-001`.
+---@param args Args
 function Commands.AIEText(args)
 	Commands.AIE(args, "text-davinci-edit-001")
 end
 addcmd(Commands.AIEText, { range = true, nargs = "*" })
 
+-- Chat with AI using [chats/completions OpenAI API](https://platform.openai.com/docs/api-reference/chat/create).
+-- The response will be printed at cursor position.
+-- The chat conversations history is saved into `global.cache_dir/kai/chat*.json` files.
+-- Chat history is send to chats/completion API reduced to the `chat_max_tokens` number of tokens.
+--    - To keep below maximum number of tokens allowed and also to reduce number of tokens you pay for.
+--    - The calculation of tokens is approximate, because really counting tokens would be too hard.
+-- I use this for prompting simple stuff, like `:AI how to write lua function that does something...?`
+-- then I can polish the results by asking follow up questions.
+-- I can use this freely, because it does not send company proprietary code to OpenAI.
 ---@param args Args
 function Commands.AI(args)
 	--
@@ -2074,6 +2091,7 @@ function Commands.AIModel(args)
 end
 addcmd(Commands.AIModel, { nargs = "?", complete = complete_chat_models() })
 
+-- Starts a new chat with specific name and prompt.
 ---@param args Args
 function Commands.AIChatNew(args)
 	local name = args.fargs[1]
@@ -2088,6 +2106,7 @@ function Commands.AIChatNew(args)
 end
 addcmd(Commands.AIChatNew, { nargs = "*" })
 
+-- Selects a chat history file to use by name. The "default" chat is the default.
 ---@param args Args
 function Commands.AIChatUse(args)
 	assert(#args.fargs == 1, sprintf("Wrong number of arguments: %d", #args.fargs))
@@ -2097,6 +2116,7 @@ function Commands.AIChatUse(args)
 end
 addcmd(Commands.AIChatUse, { nargs = 1, complete = complete_chat_names() })
 
+-- Opens the current chat, or given an argument open the chat with the name
 ---@param args Args
 function Commands.AIChatOpen(args)
 	assert(#args.fargs <= 1, sprintf("Wrong number of arguments: %d", #args.fargs))
@@ -2129,6 +2149,7 @@ function Commands.AIChatOpen(args)
 end
 addcmd(Commands.AIChatOpen, { nargs = "?", complete = complete_chat_names() })
 
+-- Print chat contents
 ---@param args Args
 function Commands.AIChatView(args)
 	assert(#args.fargs <= 1, sprintf("Wrong number of arguments: %d", #args.fargs))
@@ -2138,6 +2159,7 @@ function Commands.AIChatView(args)
 end
 addcmd(Commands.AIChatView, { nargs = "?", complete = complete_chat_names() })
 
+-- Lists the chats
 ---@param args Args
 function Commands.AIChatList(args)
 	assert(#args.fargs == 0, sprintf("Wrong number of arguments: %d", #args.fargs))
@@ -2160,6 +2182,7 @@ function Commands.AIChatList(args)
 end
 addcmd(Commands.AIChatList, {})
 
+-- Remove the chat with the name.
 ---@param args Args
 function Commands.AIChatRemove(args)
 	assert(#args.fargs <= 1, sprintf("Wrong number of arguments: %d", #args.fargs))
@@ -2208,7 +2231,6 @@ addcmd(Commands.AIA, { range = true, nargs = "*" })
 ---@field command Commands
 local M = { commands = Commands, tok = Tok, my = my, Chat = Chat }
 
-
 ---@param args Args
 local function cmd_dispatcher(args)
 	-- For testing only, unload packages to refresh them, for testing.
@@ -2225,9 +2247,9 @@ end
 
 function M.setup()
 	for k, v in pairs(M.commands) do
-        assert(type(k) == "string")
-        assert(type(v) == "function")
-        assert(type(cmdopts[v]) == "table")
+		assert(type(k) == "string")
+		assert(type(v) == "function")
+		assert(type(cmdopts[v]) == "table")
 		--my.debug("create_user_command %s with %s", k, vim.inspect(M.opts[v]))
 		vim.api.nvim_create_user_command(k, cmd_dispatcher, cmdopts[v])
 	end

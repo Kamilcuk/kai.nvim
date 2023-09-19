@@ -22,27 +22,72 @@ Put this with vim-plug:
 Plug 'kamilcuk/kai.nvim'
 ```
 
-## Options
+## Global options
 
-You can avoid loading the plugin with AI commands by setting `g:kai_loaded = v:true`.
+kai_cache_dir
 
-```
-kai_cache_dir string The cache dir used to store conversations history.
-kai_chat_use string The current conversation chat to use.
-kai_chat_max_tokens integer The maximum number of tokens to send to chat/completions API. There is a limit in the API.
-kai_chat_temperature number The temperature option when talking to chat/completions API.
-kai_chat_model string The default chat model to use
-kai_completions_max_tokens integer The maximum number of tokens to send to completions API.
-kai_completions_model string The completions model to use
-kai_edit_model string The edits API model to use
-kai_context_after integer The default number of lines to send to completions API after cursor.
-kai_context_before integer The default number of lines to send to completione API before cursor.
-kai_indicator_text string The indication to show on the indication panel when working.
-kai_temperature number The temperature to send to other apis except chat/completions API.
-kai_timeout integer Timeout of curl in seconds.
-```
+: string The cache dir used to store conversations history. default: stdpath(cache)/kai/
 
-The max tokens for gpt-3 is 4096. The `kai_chat_max_tokens` is set to 3500, so that there are 500 tokens for the answer.
+kai_chat_max_tokens
+
+: integer The maximum number of tokens to send to chat/completions API. There is a limit in the API.
+
+kai_chat_model
+
+: string The default chat model to use
+
+kai_chat_temperature
+
+: number The temperature option when talking to chat/completions API.
+
+kai_chat_use
+
+: string The current conversation chat to use.
+
+kai_completions_max_tokens
+
+: integer The maximum number of tokens to send to completions API.
+
+kai_completions_model
+
+: string The completions model to use
+
+kai_context_after
+
+: integer The default number of lines to send to completions API after cursor.
+
+kai_context_before
+
+: integer The default number of lines to send to completione API before cursor.
+
+kai_debug
+
+: boolean Increase verbosity.
+
+kai_edit_model
+
+: string The edits API model to use
+
+kai_indicator_text
+
+: string The indication to show on the indication panel when working.
+
+kai_loaded
+
+: boolean Set to true skip loading this plugin with AI user commands.
+
+kai_mock
+
+: string? Used for debugging.
+
+kai_temperature
+
+: number The temperature to send to other apis except chat/completions API.
+
+kai_timeout
+
+: integer Timeout of curl in seconds.
+
 
 ## How do I use this?
 
@@ -51,62 +96,89 @@ on how to write good AI prompts.
 
 ### Completion
 
-- `:AIA`
-    - Mnemonic from AI Add.
-    - This is the main command that I use for filling up unfinished functions.
-    - By default takes 20 lines before position and 20 lines after the cursor position.
-    - Sends that to [completions OpenAI API](https://platform.openai.com/docs/api-reference/completions).
-    - The response from API is added into the buffer at cursor position.
-    - Command takes a prompt
-        - `:AIA write code here that changes the world`
-        - The prompt is added to the before part with two newline and three backticks.
-    - Command takes a single number
-        - A single number specifies the number of lines before and after cursor position to send to the API.
-            - `:20AIA` is the default. For example: `:40AIA` `:1000AIA`
-            - The single number does _not_ represent the line number, I decided that is useless.
-    - Command takes a line range
-        - A range specifies the number of lines to send the API.
-            - `:-20,+10AIA` `:%AIA` `:'<,'>AIA`
-            - Takes the selection and split it on cursor position for before and after sections.
 
-### Edit
+:AI
 
-- `:AIE instruction`
-    - Mnemonic from AI Edit.
-    - Uses [edits OpenAI API](https://platform.openai.com/docs/api-reference/moderations).
-    - Just `:AIA`, by default sends 20 lines before and after cursor position.
-    - Takes prompt sends as instruction.
-    - I typically select text and use `:'<,'>AIE do this`.
-    - `%AIE do this`
-- `:AIEText instruction`
-    - Like `:AIE` but uses `text-davinci-edit-001` model instead of `code-davinci-edit-001`.
+:  Chat with AI using [chats/completions OpenAI API](https://platform.openai.com/docs/api-reference/chat/create).
+ The response will be printed at cursor position.
+ The chat conversations history is saved into `global.cache_dir/kai/chat*.json` files.
+ Chat history is send to chats/completion API reduced to the `chat_max_tokens` number of tokens.
+    - To keep below maximum number of tokens allowed and also to reduce number of tokens you pay for.
+    - The calculation of tokens is approximate, because really counting tokens would be too hard.
+ I use this for prompting simple stuff, like `:AI how to write lua function that does something...?`
+ then I can polish the results by asking follow up questions.
+ I can use this freely, because it does not send company proprietary code to OpenAI.
 
-### Chat
 
-- `:AI prompt`
-    - Chat with AI using [chats/completions OpenAI API](https://platform.openai.com/docs/api-reference/chat/create).
-    - The response will be printed at cursor position.
-    - The chat conversations history is saved into `global.cache_dir/kai/chat*.json` files.
-    - Chat history is send to chats/completion API reduced to the `chat_max_tokens` number of tokens.
-        - To keep below maximum number of tokens allowed and also to reduce number of tokens you pay for.
-        - The calculation of tokens is approximate, because really counting tokens would be too hard.
-    - I use this for prompting simple stuff, like `:AI how to write lua function that does something...?`
-      then I can polish the results by asking follow up questions.
-    - I can use this freely, because it does not send company proprietary code to OpenAI.
-- `:AI4`
-    - Like `:AI` but uses GPT4 instead of cheaper GPT3.
-- `:AIChatList`
-    - Lists the chats
-- `:AIChatNew name prompt...`
-    - Starts a new chat with specific name and prompt.
-- `:AIChatUse name`
-    - Selects a chat history file to use by name. The "default" chat is the default.
-- `:AIChatOpen`
-    - Opens the current chat, or given an argument open the chat with the name
-- `:AIChatRemove name`
-    - Remove the chat with the name.
-- `:AIChatList`
-    - Lists chat history as messages. (AIChatOpen does the same, I might want to remove this).
+:AIA
+
+:  Mnemonic from AI Add.
+ This is the main command that I use for filling up unfinished functions.
+ By default takes 20 lines before position and 20 lines after the cursor position.
+ Sends that to [completions OpenAI API](https://platform.openai.com/docs/api-reference/completions).
+ The response from API is added into the buffer at cursor position.
+ Command takes a prompt
+   - `:AIA write code here that changes the world`
+   - The prompt is added to the before part with two newline and three backticks.
+ Command takes a single number
+   - A single number specifies the number of lines before and after cursor position to send to the API.
+       - `:20AIA` is the default. For example: `:40AIA` `:1000AIA`
+       - The single number does _not_ represent the line number, I decided that is useless.
+ Command takes a line range
+   - A range specifies the number of lines to send the API.
+       - `:-20,+10AIA` `:%AIA` `:'<,'>AIA`
+       - Takes the selection and split it on cursor position for before and after sections.
+
+
+:AIChatList
+
+:  Lists the chats
+
+
+:AIChatNew
+
+:  Starts a new chat with specific name and prompt.
+
+
+:AIChatOpen
+
+:  Opens the current chat, or given an argument open the chat with the name
+
+
+:AIChatRemove
+
+:  Remove the chat with the name.
+
+
+:AIChatUse
+
+:  Selects a chat history file to use by name. The "default" chat is the default.
+
+
+:AIChatView
+
+: 
+
+
+:AIE
+
+:  Mnemonic from AI Edit.
+ Uses [edits OpenAI API](https://platform.openai.com/docs/api-reference/moderations).
+ Just `:AIA`, by default sends 20 lines before and after cursor position.
+ Takes prompt sends as instruction.
+ I typically select text and use `:'<,'>AIE do this`.
+ `%AIE do this`
+
+
+:AIEText
+
+:  Like `:AIE` but uses `text-davinci-edit-001` model instead of `code-davinci-edit-001`.
+
+
+:AIModel
+
+: 
+
 
 ## Tutorial
 
