@@ -1,6 +1,6 @@
 -- Who had fun learning lua? This guy.
 
-local base64 = require("base64")
+local base64 = require("kai/base64")
 
 -- {{{1 config
 --
@@ -34,6 +34,7 @@ local config_defaults = {
 	completions_model = "text-davinci-003",
 	-- completions_model = "gpt-3.5-turbo-instruct",
 	edit_model = "code-davinci-edit-001",
+	-- completions_model = "gpt-3.5-turbo-instruct",
 	context_after = 20,
 	context_before = 20,
 	indicator_text = "🤖",
@@ -45,9 +46,15 @@ local config_defaults = {
 local config = setmetatable({}, {
 	-- Dynamically get values from global options when evaluated.
 	__index = function(_, key)
-		local ret = vim.g["kai_" .. key] or config_defaults[key]
-		assert(ret ~= nil, sprintf("Internal error: There is no such key in config: %s %s", key, ret))
-		return ret
+		assert(config_defaults[key] ~= nil, sprintf("Internal error: There is no such key in config: %s", key))
+		local value = vim.g["kai_" .. key] or config_defaults[key]
+		assert(value ~= nil, "Error: option value can't be nil")
+		return value
+	end,
+	__newindex = function(t, key, value)
+		assert(value ~= nil, "Error: option value can't be nil")
+		assert(config_defaults[key] ~= nil, sprintf("Internal error: There is no such key in config: %s", key))
+		vim.g["kai_" .. key] = value
 	end,
 })
 
@@ -262,6 +269,10 @@ function my.mkcachedir()
 		ret = vim.fn.mkdir(config.cache_dir, "p")
 		assert(ret ~= 0, sprintf("Cound not create cache directory: %s", config.cache_dir))
 	end
+end
+
+function my.split_commalist(txt)
+	return vim.split(txt:gsub("%s+", ""), ",")
 end
 
 -- }}}
@@ -1770,13 +1781,18 @@ end
 -- {{{1 Cmd object
 
 ---@class Args
----@field args string
----@field range integer
----@field line1 integer
----@field line2 integer
----@field bang boolean
----@field count integer
----@field fargs string[]
+---@field name string Command name
+---@field args string The args passed to the command, if any <args>
+---@field fargs table The args split by unescaped whitespace (when more than one argument is allowed), if any <f-args>
+---@field nargs string Number of arguments :command-nargs
+---@field bang boolean "true" if the command was executed with a ! modifier <bang>
+---@field line1 number The starting line of the command range <line1>
+---@field line2 number The final line of the command range <line2>
+---@field range number The number of items in the command range: 0, 1, or 2 <range>
+---@field count number Any count supplied <count>
+---@field reg string The optional register, if specified <reg>
+---@field mods string Command modifiers, if any <mods>
+---@field smods table Command modifiers in a structured format. Has the same structure as the "mods" key of nvim_parse_cmd().
 
 ---@class Cmd
 ---@field args Args
@@ -1901,18 +1917,76 @@ function Cmd:inchatbuffer()
 end
 
 -- }}}
+-- {{{1 Commands
+
+-- VIM command completion function.
+---@alias CompletionFunc fun(string, any, any): string[]
+
+---@type string[]
+local openai_chat_models = my.split_commalist(
+	"gpt-4, gpt-4-0613, gpt-4-32k, gpt-4-32k-0613, gpt-3.5-turbo, gpt-3.5-turbo-0613, gpt-3.5-turbo-16k, gpt-3.5-turbo-16k-0613"
+)
+
+---@type string[]
+local openai_completions_models = my.split_commalist(
+	"text-davinci-003, text-davinci-002, text-davinci-001, text-curie-001, text-babbage-001, text-ada-001, davinci, curie, babbage, ada"
+)
+
+-- Given a function that returns a list of string generate vim completion function.
+---@param listcb fun(): string[] A function that returns list of words to complete.
+---@return CompletionFunc
+local function completor(listcb)
+	return function(arglead, cmdline, cursorpos)
+		if not arglead or arglead == "" then
+			return listcb()
+		end
+		local ret = {}
+		for _, v in ipairs(listcb()) do
+			if vim.startswith(v, arglead) then
+				table.insert(ret, v)
+			end
+		end
+		return ret
+	end
+end
+
+---@return CompletionFunc
+local function complete_chat_names()
+	return completor(Chat.listnames)
+end
+
+---@return CompletionFunc
+local function complete_chat_models()
+	return completor(function()
+		return openai_chat_models
+	end)
+end
+
+-- }}}
 -- {{{1 M.AI
 
----@class M
-local M = { tok = Tok, my = my, Chat = Chat }
+---@class Commands
 
----@param opts table
-function M.setup(opts)
-	vim.tbl_extend(config, opts)
+-- VIM command options.
+---@class CommandOpts
+---@field range boolean?
+---@field nargs "*"|"?"|number?
+---@field completion CompletionFunc?
+
+-- The main module return.
+---@class M
+---@field private opts table<fun(Args): nil, CommandOpts>
+---@field command Commands
+local M = { opts = {}, command = {}, tok = Tok, my = my, Chat = Chat }
+
+---@param cb fun(Args): nil
+---@param opts CommandOpts
+function M.addopts(cb, opts)
+    M.opts[cb] = opts
 end
 
 ---@param args Args
-function M.AIA(args)
+function M.command.AIA(args)
 	local cmd = Cmd.new(args)
 	local cursor = cmd.cursor
 	local replace = Region.new(cursor, cursor)
@@ -1924,12 +1998,13 @@ function M.AIA(args)
 	-- print(vim.inspect(prefix), vim.inspect(suffix))
 	cmd:openai(replace):completions({ prompt = prefix, suffix = suffix })
 end
+M.addopts(M.command.AIA, { range = true, nargs = "*" })
 
 -------------------------------------------------------------------------------
 
 ---@param args Args
 ---@param model string?
-function M.AIE(args, model)
+function M.command.AIE(args, model)
 	model = model or config.edit_model
 	--
 	local cmd = Cmd.new(args)
@@ -1942,17 +2017,17 @@ function M.AIE(args, model)
 		instruction = cmd.prompt,
 	})
 end
+M.addopts(M.command.AIE, { range = true, nargs = "*" })
 
-function M.AIEText(args)
-	M.AIE(args, "text-davinci-edit-001")
+function M.command.AIEText(args)
+	M.command.AIE(args, "text-davinci-edit-001")
 end
+M.addopts(M.command.AIEText, { range = true, nargs = "*" })
 
 -------------------------------------------------------------------------------
 
 ---@param args Args
----@param model string?
-function M.AI(args, model)
-	model = model or config.chat_model
+function M.command.AI(args)
 	--
 	local cmd = Cmd.new(args)
 	cmd.buffern:chatbuffermodify()
@@ -2004,37 +2079,23 @@ function M.AI(args, model)
 		replace = Region.new(bufferend, bufferend)
 	end
 	--
-	cmd:openai(replace):chat(chat, { model = model })
+	cmd:openai(replace):chat(chat, { model = config.chat_model })
 end
+M.addopts(M.command.AI, { range = true, nargs = "*" })
 
 ---@param args Args
-function M.AI3(args)
-	M.AI(args, "gpt-3.5-turbo")
-end
-
----@param args Args
-function M.AI4(args)
-	M.AI(args, "gpt-4")
-end
-
----@return string[]
-function M.complete_chat_names(ArgLead, CmdLine, CursorPos)
-	local names = Chat.listnames()
-	local ret = {}
-	if ArgLead == "" then
-		ret = names
-	else
-		for _, v in ipairs(names) do
-			if vim.startswith(v, ArgLead) then
-				table.insert(ret, v)
-			end
-		end
+function M.command.AIModel(args)
+	local m = args.fargs[1]
+	if m ~= nil then
+		assert(vim.tbl_contains(openai_chat_models, m))
+		config.chat_model = m
 	end
-	return ret
+	my.log("Using chat model: %s", config.chat_model)
 end
+M.addopts(M.command.AIModel, { nargs = "?", complete = complete_chat_models() })
 
 ---@param args Args
-function M.AIChatNew(args)
+function M.command.AIChatNew(args)
 	local name = args.fargs[1]
 	local prompt = table.concat(vim.list_slice(args.fargs, 2), " ")
 	assert(
@@ -2045,17 +2106,19 @@ function M.AIChatNew(args)
 	vim.g.kai_chat_use = name
 	my.log("Created chat %s and switched to it", name)
 end
+M.addopts(M.command.AIChatNew, { nargs = "*" })
 
 ---@param args Args
-function M.AIChatUse(args)
+function M.command.AIChatUse(args)
 	assert(#args.fargs == 1, sprintf("Wrong number of arguments: %d", #args.fargs))
 	local name = args.fargs[1]
 	Chat.load(name)
 	vim.g.kai_chat_use = name
 end
+M.addopts(M.command.AIChatUse, { nargs = 1, complete = complete_chat_names() })
 
 ---@param args Args
-function M.AIChatOpen(args)
+function M.command.AIChatOpen(args)
 	assert(#args.fargs <= 1, sprintf("Wrong number of arguments: %d", #args.fargs))
 	local name = args.fargs[1] or config.chat_use
 	local chat = Chat.load(name)
@@ -2084,17 +2147,19 @@ function M.AIChatOpen(args)
 	chat.show_m_e(buffer)
 	vim.api.nvim_buf_set_option(buffer, "modifiable", false)
 end
+M.addopts(M.command.AIChatOpen, { nargs = "?", complete = complete_chat_names() })
 
 ---@param args Args
-function M.AIChatView(args)
+function M.command.AIChatView(args)
 	assert(#args.fargs <= 1, sprintf("Wrong number of arguments: %d", #args.fargs))
 	local name = args.fargs[1] or config.chat_use
 	local txt = Chat.load(name):to_text()
 	my.log("%s", txt)
 end
+M.addopts(M.command.AIChatView, { nargs = "?", complete = complete_chat_names() })
 
 ---@param args Args
-function M.AIChatList(args)
+function M.command.AIChatList(args)
 	assert(#args.fargs == 0, sprintf("Wrong number of arguments: %d", #args.fargs))
 	local names = Chat.listnames()
 	local txt = sprintf("There are %d chats.\n", #names)
@@ -2113,14 +2178,41 @@ function M.AIChatList(args)
 	txt = txt .. my.tabularize(data, { "", "", "", "-" })
 	my.log("%s", txt)
 end
+M.addopts(M.command.AIChatList, {})
 
 ---@param args Args
-function M.AIChatRemove(args)
+function M.command.AIChatRemove(args)
 	assert(#args.fargs <= 1, sprintf("Wrong number of arguments: %d", #args.fargs))
 	local name = args.fargs[1] or config.chat_use
 	Chat.assert_exists(name)
 	Chat.new(name):delete()
 end
+M.addopts(M.command.AIChatRemove, { nargs = 1, complete = complete_chat_names() })
+
+-------------------------------------------------------------------------------
+
+---@param args Args
+local function cmd_dispatcher(args)
+	-- For testing only, unload packages to refresh them, for testing.
+	if vim.g.kai_reload then
+		for pkg, _ in ipairs(package.loaded) do
+			if vim.startswith(pkg, "kai") then
+				package.loaded[pkg] = nil
+			end
+		end
+	end
+	-- Call the command with command. prepended.
+	require("kai").command[args.name](args)
+end
+
+function M.setup()
+	for k, v in pairs(M.command) do
+		--my.debug("create_user_command %s with %s", k, vim.inspect(M.opts[v]))
+		vim.api.nvim_create_user_command(k, cmd_dispatcher, M.opts[v])
+	end
+end
+
+-------------------------------------------------------------------------------
 
 return M
 
