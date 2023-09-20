@@ -1,58 +1,51 @@
-# 🤖 kai.nvim
+# kai.nvim
 
-Neovim plugin for generating and editing text using OpenAI.
+🤖 Neovim plugin for generating, editing and chatting with OpenAI.
 
 ## Features
 
 - Use OpenAI completions, edit and chat API, see
   [https://platform.openai.com/docs/guides/completion](https://platform.openai.com/docs/guides/completion).
+- Depends only on `curl` installed, no additional installation required.
 - Generate new text using a prompt.
 - Select and edit existing text in-place.
-- Depends on `curl` installed, no additional installation required.
+- Chat with OpenAI in new window.
+- Multiple chats with separate history and conversations.
+- Full tokenizer written in lua to accurately count number of tokens.
 
-## Installing
+# Installation
 
 Generate OpenAI API key from [https://beta.openai.com/account/api-keys](https://beta.openai.com/account/api-keys).
 
 Export the key in `$OPENAI_API_KEY` environment variable.
 
-Put this with vim-plug:
+Install the plugin with vim-plug:
 
 ```vim
 Plug 'kamilcuk/kai.nvim'
 ```
 
-## Global options
+# Options
 
 {% for c in configs %}
-kai_{{c.name}}
+#### {{c.name}}
 
-: {{c.view}} {{c.desc}}
+{{c.view}}
+
+{{c.desc}}
 
 {% endfor %}
 
-## How do I use this?
+# How do I use this?
 
-Read [https://platform.openai.com/docs/guides/code](https://platform.openai.com/docs/guides/code)
+Check [https://platform.openai.com/docs/guides/code](https://platform.openai.com/docs/guides/code)
 on how to write good AI prompts.
 
-### Completion
-
-{% for c in commands %}
-
-:{{c.name}}
-
-: {{c.desc}}
-
-{% endfor %}
-
-## Tutorial
-
-For example:
+For example with cursor inside a function, type command [:AIA](#:AIA):
 
 ```typescript
 function capitalize (str: string): string {
-    <cursor><type :AIA>
+    <cursor>
 }
 ```
 
@@ -128,7 +121,18 @@ List of capitals:
 5. Honolulu
 ```
 
-## Important Disclaimers
+## Commands
+
+{% for c in commands %}
+
+#### :{{c.name}}
+
+{{c.desc}}
+
+{% endfor %}
+
+
+# Important Disclaimers
 
 **Accuracy**: GPT is good at producing text and code that looks correct at first glance, but may be
 completely wrong. Make sure you carefully proof read and test everything output by this plugin!
@@ -136,6 +140,6 @@ completely wrong. Make sure you carefully proof read and test everything output 
 **Privacy**: This plugin sends text to OpenAI when generating completions and edits. Don't use it in
 files containing sensitive information.
 
-## License
+# License
 
 See LICENSE.txt

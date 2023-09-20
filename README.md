@@ -1,192 +1,139 @@
-# 🤖 kai.nvim
+# kai.nvim
 
-Neovim plugin for generating and editing text using OpenAI.
+🤖 Neovim plugin for generating, editing and chatting with OpenAI.
 
 ## Features
 
 - Use OpenAI completions, edit and chat API, see
   [https://platform.openai.com/docs/guides/completion](https://platform.openai.com/docs/guides/completion).
+- Depends only on `curl` installed, no additional installation required.
 - Generate new text using a prompt.
 - Select and edit existing text in-place.
-- Depends on `curl` installed, no additional installation required.
+- Chat with OpenAI in new window.
+- Multiple chats with separate history and conversations.
+- Full tokenizer written in lua to accurately count number of tokens.
 
-## Installing
+# Installation
 
 Generate OpenAI API key from [https://beta.openai.com/account/api-keys](https://beta.openai.com/account/api-keys).
 
 Export the key in `$OPENAI_API_KEY` environment variable.
 
-Put this with vim-plug:
+Install the plugin with vim-plug:
 
 ```vim
 Plug 'kamilcuk/kai.nvim'
 ```
 
-## Global options
+# Options
 
-kai_cache_dir
+#### g:kai_cache_dir
 
-: string The cache dir used to store conversations history. default: stdpath(cache)/kai/
+string
 
-kai_chat_max_tokens
+The cache dir used to store conversations history. default: stdpath(cache)/kai/
 
-: integer The maximum number of tokens to send to chat/completions API. There is a limit in the API.
+#### g:kai_chat_max_tokens
 
-kai_chat_model
+integer
 
-: string The default chat model to use
+The maximum number of tokens to send to chat/completions API. There is a limit in the API.
 
-kai_chat_temperature
+#### g:kai_chat_model
 
-: number The temperature option when talking to chat/completions API.
+string
 
-kai_chat_use
+The default chat model to use
 
-: string The current conversation chat to use.
+#### g:kai_chat_temperature
 
-kai_completions_max_tokens
+number
 
-: integer The maximum number of tokens to send to completions API.
+The temperature option when talking to chat/completions API.
 
-kai_completions_model
+#### g:kai_chat_use
 
-: string The completions model to use
+string
 
-kai_context_after
+The current conversation chat to use.
 
-: integer The default number of lines to send to completions API after cursor.
+#### g:kai_completions_max_tokens
 
-kai_context_before
+integer
 
-: integer The default number of lines to send to completione API before cursor.
+The maximum number of tokens to send to completions API.
 
-kai_debug
+#### g:kai_completions_model
 
-: boolean Increase verbosity.
+string
 
-kai_edit_model
+The completions model to use
 
-: string The edits API model to use
+#### g:kai_context_after
 
-kai_indicator_text
+integer
 
-: string The indication to show on the indication panel when working.
+The default number of lines to send to completions API after cursor.
 
-kai_loaded
+#### g:kai_context_before
 
-: boolean Set to true skip loading this plugin with AI user commands.
+integer
 
-kai_mock
+The default number of lines to send to completione API before cursor.
 
-: string? Used for debugging.
+#### g:kai_debug
 
-kai_temperature
+boolean
 
-: number The temperature to send to other apis except chat/completions API.
+Increase verbosity.
 
-kai_timeout
+#### g:kai_edit_model
 
-: integer Timeout of curl in seconds.
+string
+
+The edits API model to use
+
+#### g:kai_indicator_text
+
+string
+
+The indication to show on the indication panel when working.
+
+#### g:kai_loaded
+
+boolean
+
+Set to true skip loading this plugin with AI user commands.
+
+#### g:kai_mock
+
+string?
+
+Used for debugging.
+
+#### g:kai_temperature
+
+number
+
+The temperature to send to other apis except chat/completions API.
+
+#### g:kai_timeout
+
+integer
+
+Timeout of curl in seconds.
 
 
-## How do I use this?
+# How do I use this?
 
-Read [https://platform.openai.com/docs/guides/code](https://platform.openai.com/docs/guides/code)
+Check [https://platform.openai.com/docs/guides/code](https://platform.openai.com/docs/guides/code)
 on how to write good AI prompts.
 
-### Completion
-
-
-:AI
-
-:  Chat with AI using [chats/completions OpenAI API](https://platform.openai.com/docs/api-reference/chat/create).
- The response will be printed at cursor position.
- The chat conversations history is saved into `global.cache_dir/kai/chat*.json` files.
- Chat history is send to chats/completion API reduced to the `chat_max_tokens` number of tokens.
-    - To keep below maximum number of tokens allowed and also to reduce number of tokens you pay for.
-    - The calculation of tokens is approximate, because really counting tokens would be too hard.
- I use this for prompting simple stuff, like `:AI how to write lua function that does something...?`
- then I can polish the results by asking follow up questions.
- I can use this freely, because it does not send company proprietary code to OpenAI.
-
-
-:AIA
-
-:  Mnemonic from AI Add.
- This is the main command that I use for filling up unfinished functions.
- By default takes 20 lines before position and 20 lines after the cursor position.
- Sends that to [completions OpenAI API](https://platform.openai.com/docs/api-reference/completions).
- The response from API is added into the buffer at cursor position.
- Command takes a prompt
-   - `:AIA write code here that changes the world`
-   - The prompt is added to the before part with two newline and three backticks.
- Command takes a single number
-   - A single number specifies the number of lines before and after cursor position to send to the API.
-       - `:20AIA` is the default. For example: `:40AIA` `:1000AIA`
-       - The single number does _not_ represent the line number, I decided that is useless.
- Command takes a line range
-   - A range specifies the number of lines to send the API.
-       - `:-20,+10AIA` `:%AIA` `:'<,'>AIA`
-       - Takes the selection and split it on cursor position for before and after sections.
-
-
-:AIChatList
-
-:  Lists the chats
-
-
-:AIChatNew
-
-:  Starts a new chat with specific name and prompt.
-
-
-:AIChatOpen
-
-:  Opens the current chat, or given an argument open the chat with the name
-
-
-:AIChatRemove
-
-:  Remove the chat with the name.
-
-
-:AIChatUse
-
-:  Selects a chat history file to use by name. The "default" chat is the default.
-
-
-:AIChatView
-
-:  Print chat contents
-
-
-:AIE
-
-:  Mnemonic from AI Edit.
- Uses [edits OpenAI API](https://platform.openai.com/docs/api-reference/moderations).
- Just `:AIA`, by default sends 20 lines before and after cursor position.
- Takes prompt sends as instruction.
- I typically select text and use `:'<,'>AIE do this`.
- `%AIE do this`
-
-
-:AIEText
-
-:  Like `:AIE` but uses `text-davinci-edit-001` model instead of `code-davinci-edit-001`.
-
-
-:AIModel
-
-:  Switch model used by AI
-
-
-## Tutorial
-
-For example:
+For example with cursor inside a function, type command [:AIA](#:AIA):
 
 ```typescript
 function capitalize (str: string): string {
-    <cursor><type :AIA>
+    <cursor>
 }
 ```
 
@@ -262,7 +209,102 @@ List of capitals:
 5. Honolulu
 ```
 
-## Important Disclaimers
+## Commands
+
+
+#### :AI
+
+ :[range|number]AI {prompt}
+ - Chat with AI using [chats/completions OpenAI API](https://platform.openai.com/docs/api-reference/chat/create).
+ - The response will be printed at cursor position.
+ - The chat conversations history is saved into `global.cache_dir/kai/chat*.json` files.
+ - Chat history is send to chats/completion API reduced to the `chat_max_tokens` number of tokens.
+ -    - To keep below maximum number of tokens allowed and also to reduce number of tokens you pay for.
+ -    - The calculation of tokens is approximate, because really counting tokens would be too hard.
+ - I use this for prompting simple stuff, like `:AI how to write lua function that does something...?`
+ - then I can polish the results by asking follow up questions.
+ - I can use this freely, because it does not send company proprietary code to OpenAI.
+
+
+#### :AIA
+
+ :[range|number]AIA {[prompt]}
+ - Mnemonic from AI Add.
+ - This is the main command that I use for filling up unfinished functions.
+ - By default takes 20 lines before position and 20 lines after the cursor position.
+ - Sends that to [completions OpenAI API](https://platform.openai.com/docs/api-reference/completions).
+ - The response from API is added into the buffer at cursor position.
+ - Command takes optional prompt
+   - `:AIA write code here that changes the world`
+   - The prompt is added to the before part with two newline and three backticks.
+ - Command takes a single number
+   - A single number specifies the number of lines before and after cursor position to send to the API.
+       - `:20AIA` is the default. For example: `:40AIA` `:1000AIA`
+       - The single number does _not_ represent the line number, I decided that is useless.
+ - Command takes a line range
+   - A range specifies the number of lines to send the API.
+       - `:-20,+10AIA` `:%AIA` `:'<,'>AIA`
+       - Takes the selection and split it on cursor position for before and after sections.
+
+
+#### :AIChatList
+
+ :AIChatList
+ Lists the chats
+
+
+#### :AIChatNew
+
+ :AIChatNew {system prompt}
+ Starts a new chat with specific name and prompt.
+
+
+#### :AIChatOpen
+
+ :AIChatOpen {chat name}
+ Opens the current chat, or given an argument open the chat with the name
+
+
+#### :AIChatRemove
+
+ :AIChatRemove {[chat name]}
+ Remove the chat with the name.
+
+
+#### :AIChatUse
+
+ :AIChatUse {[chat name]}
+ Selects a chat history file to use by name. The "default" chat is the default.
+
+
+#### :AIChatView
+
+ :AIChatView {[chat name]}
+ Print chat contents
+
+
+#### :AIE
+
+ Mnemonic from AI Edit.
+ Uses [edits OpenAI API](https://platform.openai.com/docs/api-reference/moderations).
+ Just `:AIE`, by default sends 20 lines before and after cursor position.
+ Takes prompt sends as instruction.
+ I typically select text and use `:'<,'>AIE do this`.
+ `%AIE do this`
+
+
+#### :AIEText
+
+ Like `:AIE` but uses `text-davinci-edit-001` model instead of `code-davinci-edit-001`.
+
+
+#### :AIModel
+
+ Switch model used by AI
+
+
+
+# Important Disclaimers
 
 **Accuracy**: GPT is good at producing text and code that looks correct at first glance, but may be
 completely wrong. Make sure you carefully proof read and test everything output by this plugin!
@@ -270,6 +312,6 @@ completely wrong. Make sure you carefully proof read and test everything output 
 **Privacy**: This plugin sends text to OpenAI when generating completions and edits. Don't use it in
 files containing sensitive information.
 
-## License
+# License
 
 See LICENSE.txt

@@ -1983,6 +1983,41 @@ end
 ---@class Commands
 local Commands = {}
 
+-- :[range|number]AIA {[prompt]}
+-- - Mnemonic from AI Add.
+-- - This is the main command that I use for filling up unfinished functions.
+-- - By default takes 20 lines before position and 20 lines after the cursor position.
+-- - Sends that to [completions OpenAI API](https://platform.openai.com/docs/api-reference/completions).
+-- - The response from API is added into the buffer at cursor position.
+-- - Command takes optional prompt
+--   - `:AIA write code here that changes the world`
+--   - The prompt is added to the before part with two newline and three backticks.
+-- - Command takes a single number
+--   - A single number specifies the number of lines before and after cursor position to send to the API.
+--       - `:20AIA` is the default. For example: `:40AIA` `:1000AIA`
+--       - The single number does _not_ represent the line number, I decided that is useless.
+-- - Command takes a line range
+--   - A range specifies the number of lines to send the API.
+--       - `:-20,+10AIA` `:%AIA` `:'<,'>AIA`
+--       - Takes the selection and split it on cursor position for before and after sections.
+---@param args Args?
+---@return CommandOpts?
+function Commands.AIA(args)
+	if not args then
+		return { range = true, nargs = "*" }
+	end
+	local cmd = Cmd.new(args)
+	local cursor = cmd.cursor
+	local replace = Region.new(cursor, cursor)
+	local context = cmd:get_context()
+	assert(context.start <= cursor and cursor <= context.stop, "Cursor position has to be inside selected region")
+	local prefix = cmd:buffer_get_text(Region.new(context.start, cursor))
+	local suffix = cmd:buffer_get_text(Region.new(cursor, context.stop))
+	prefix = cmd:prefix_with_prompt(prefix)
+	-- print(vim.inspect(prefix), vim.inspect(suffix))
+	cmd:openai(replace):completions({ prompt = prefix, suffix = suffix })
+end
+
 -- Mnemonic from AI Edit.
 -- Uses [edits OpenAI API](https://platform.openai.com/docs/api-reference/moderations).
 -- Just `:AIE`, by default sends 20 lines before and after cursor position.
@@ -2016,15 +2051,16 @@ function Commands.AIEText(args)
 	return Commands.AIE(args, "text-davinci-edit-001")
 end
 
--- Chat with AI using [chats/completions OpenAI API](https://platform.openai.com/docs/api-reference/chat/create).
--- The response will be printed at cursor position.
--- The chat conversations history is saved into `global.cache_dir/kai/chat*.json` files.
--- Chat history is send to chats/completion API reduced to the `chat_max_tokens` number of tokens.
---    - To keep below maximum number of tokens allowed and also to reduce number of tokens you pay for.
---    - The calculation of tokens is approximate, because really counting tokens would be too hard.
--- I use this for prompting simple stuff, like `:AI how to write lua function that does something...?`
--- then I can polish the results by asking follow up questions.
--- I can use this freely, because it does not send company proprietary code to OpenAI.
+-- :[range|number]AI {prompt}
+-- - Chat with AI using [chats/completions OpenAI API](https://platform.openai.com/docs/api-reference/chat/create).
+-- - The response will be printed at cursor position.
+-- - The chat conversations history is saved into `global.cache_dir/kai/chat*.json` files.
+-- - Chat history is send to chats/completion API reduced to the `chat_max_tokens` number of tokens.
+-- -    - To keep below maximum number of tokens allowed and also to reduce number of tokens you pay for.
+-- -    - The calculation of tokens is approximate, because really counting tokens would be too hard.
+-- - I use this for prompting simple stuff, like `:AI how to write lua function that does something...?`
+-- - then I can polish the results by asking follow up questions.
+-- - I can use this freely, because it does not send company proprietary code to OpenAI.
 ---@param args Args?
 ---@return CommandOpts?
 function Commands.AI(args)
@@ -2100,6 +2136,7 @@ function Commands.AIModel(args)
 	my.log("Using chat model: %s", config.chat_model)
 end
 
+-- :AIChatNew {system prompt}
 -- Starts a new chat with specific name and prompt.
 ---@param args Args?
 ---@return CommandOpts?
@@ -2118,6 +2155,7 @@ function Commands.AIChatNew(args)
 	my.log("Created chat %s and switched to it", name)
 end
 
+-- :AIChatUse {[chat name]}
 -- Selects a chat history file to use by name. The "default" chat is the default.
 ---@param args Args?
 ---@return CommandOpts?
@@ -2131,6 +2169,7 @@ function Commands.AIChatUse(args)
 	vim.g.kai_chat_use = name
 end
 
+-- :AIChatOpen {chat name}
 -- Opens the current chat, or given an argument open the chat with the name
 ---@param args Args?
 ---@return CommandOpts?
@@ -2167,6 +2206,7 @@ function Commands.AIChatOpen(args)
 	vim.api.nvim_buf_set_option(buffer, "modifiable", false)
 end
 
+-- :AIChatView {[chat name]}
 -- Print chat contents
 ---@param args Args
 ---@return CommandOpts?
@@ -2180,6 +2220,7 @@ function Commands.AIChatView(args)
 	my.log("%s", txt)
 end
 
+-- :AIChatList
 -- Lists the chats
 ---@param args Args
 ---@return CommandOpts?
@@ -2206,6 +2247,7 @@ function Commands.AIChatList(args)
 	my.log("%s", txt)
 end
 
+-- :AIChatRemove {[chat name]}
 -- Remove the chat with the name.
 ---@param args Args?
 ---@return CommandOpts?
@@ -2217,40 +2259,6 @@ function Commands.AIChatRemove(args)
 	local name = args.fargs[1] or config.chat_use
 	Chat.assert_exists(name)
 	Chat.new(name):delete()
-end
-
--- Mnemonic from AI Add.
--- This is the main command that I use for filling up unfinished functions.
--- By default takes 20 lines before position and 20 lines after the cursor position.
--- Sends that to [completions OpenAI API](https://platform.openai.com/docs/api-reference/completions).
--- The response from API is added into the buffer at cursor position.
--- Command takes a prompt
---   - `:AIA write code here that changes the world`
---   - The prompt is added to the before part with two newline and three backticks.
--- Command takes a single number
---   - A single number specifies the number of lines before and after cursor position to send to the API.
---       - `:20AIA` is the default. For example: `:40AIA` `:1000AIA`
---       - The single number does _not_ represent the line number, I decided that is useless.
--- Command takes a line range
---   - A range specifies the number of lines to send the API.
---       - `:-20,+10AIA` `:%AIA` `:'<,'>AIA`
---       - Takes the selection and split it on cursor position for before and after sections.
----@param args Args?
----@return CommandOpts?
-function Commands.AIA(args)
-	if not args then
-		return { range = true, nargs = "*" }
-	end
-	local cmd = Cmd.new(args)
-	local cursor = cmd.cursor
-	local replace = Region.new(cursor, cursor)
-	local context = cmd:get_context()
-	assert(context.start <= cursor and cursor <= context.stop, "Cursor position has to be inside selected region")
-	local prefix = cmd:buffer_get_text(Region.new(context.start, cursor))
-	local suffix = cmd:buffer_get_text(Region.new(cursor, context.stop))
-	prefix = cmd:prefix_with_prompt(prefix)
-	-- print(vim.inspect(prefix), vim.inspect(suffix))
-	cmd:openai(replace):completions({ prompt = prefix, suffix = suffix })
 end
 
 -- }}}
