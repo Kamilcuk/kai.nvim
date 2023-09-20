@@ -157,7 +157,7 @@ on how to write good AI prompts.
 
 :AIChatView
 
-: 
+:  Print chat contents
 
 
 :AIE
@@ -177,7 +177,7 @@ on how to write good AI prompts.
 
 :AIModel
 
-: 
+:  Switch model used by AI
 
 
 ## Tutorial
